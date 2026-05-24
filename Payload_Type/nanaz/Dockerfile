@@ -6,6 +6,11 @@ RUN python -m pip install cryptography
 WORKDIR /Mythic/
 COPY [".", "."]
 
-RUN cd nanaz/agent_code && . "$HOME/.cargo/env" && cargo fetch
+RUN cd nanaz/agent_code && \
+    . "$HOME/.cargo/env" && \
+    rustup target add x86_64-pc-windows-gnu && \
+    rustup target add x86_64-unknown-linux-gnu && \
+    rustup target add x86_64-unknown-linux-musl && \
+    cargo fetch
 
-CMD ["bash", "-c", "/usr/bin/env python main.py"]
+CMD ["python3", "main.py"]
