@@ -3,10 +3,52 @@ import asyncio
 import shutil
 import json
 import pathlib
+import traceback
 
 from mythic_container.PayloadBuilder import *
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
+
+def adjust_file_name(filename: str, shellcode_format: str, output_type: str, adjust_filename: bool, selected_os: str) -> str:
+    if not adjust_filename:
+        return filename
+
+    # 使用 pathlib 优雅地获取不带后缀的文件名
+    pure_name = pathlib.Path(filename).stem
+
+    if output_type == "Source":
+        return f"{pure_name}.zip"
+
+    if output_type == "Shellcode":
+        # 使用字典映射替代 if-elif 链
+        format_map = {
+            "Binary": ".bin",
+            "Base64": ".txt",
+            "C": ".c",
+            "Python": ".py",
+            "Powershell": ".ps1"
+        }
+        ext = format_map.get(shellcode_format, ".txt")
+        return f"{pure_name}{ext}"
+
+    if "windows" in str(selected_os).lower():
+        return f"{pure_name}.exe"
+
+    return pure_name
+
+
+async def _update_step(payload_uuid: str, step_name: str, success: bool = True):
+    """独立的辅助函数，用于统一管理并安全更新 Mythic 构建步骤状态"""
+    try:
+        await SendMythicRPCPayloadUpdatebuildStep(
+            MythicRPCPayloadUpdateBuildStepMessage(
+                PayloadUUID=payload_uuid,
+                StepName=step_name,
+                StepSuccess=success
+            )
+        )
+    except Exception as rpc_err:
+        print(f"[-] [RPC 错误] 无法更新 '{step_name}' 状态: {rpc_err}", flush=True)
 
 
 class Nanaz(PayloadType):
@@ -15,135 +57,49 @@ class Nanaz(PayloadType):
     agent_type: str = AgentType.Agent
     author = "@zumpyx"
     mythic_encrypts = True
-    supported_os = [
-        SupportedOS.Windows, SupportedOS.Linux
-    ]
+    supported_os = [SupportedOS.Windows, SupportedOS.Linux]
     semver = "0.1.0"
     wrapper = False
-    wrapped_payloads = ["scarecrow_wrapper", "service_wrapper"]
+    wrapped_payloads = []
     c2_profiles = ["http"]
-    note = """
-A fully featured rust compatible training agent. Version: {}.
-    """.format(semver)
+    note = f"A fully featured rust compatible training agent. Version: {semver}."
     supports_dynamic_loading = True
-    supports_multiple_c2_instances_in_build = False
-    supports_multiple_c2_in_build = False
+    supports_multiple_c2_instances_in_build = True
+    supports_multiple_c2_in_build = True
 
+    # 已移除无用的 enable_keying 参数，前端界面更干净
     build_parameters = [
         BuildParameter(
             name="output_type",
             parameter_type=BuildParameterType.ChooseOne,
             choices=["WinExe", "Shellcode", "Service", "Source"],
             default_value="WinExe",
-            description="Output as shellcode, executable, sourcecode, or service.",
-            ui_position=1,
+            description="Output as shellcode, executable, sourcecode, or service."
         ),
         BuildParameter(
             name="shellcode_format",
             parameter_type=BuildParameterType.ChooseOne,
-            choices=["Binary", "Base64", "C", "Ruby", "Python", "Powershell", "C#", "Hex"],
+            choices=["Binary", "Base64", "C", "Python", "Powershell"],
             default_value="Binary",
-            description="Donut shellcode format options.",
-            group_name="Shellcode Options",
-            hide_conditions=[
-                HideCondition(name="output_type", operand=HideConditionOperand.NotEQ, value="Shellcode")
-            ],
-            ui_position=4
-        ),
-        BuildParameter(
-            name="shellcode_bypass",
-            parameter_type=BuildParameterType.ChooseOne,
-            choices=["None", "Abort on fail", "Continue on fail"],
-            default_value="Continue on fail",
-            description="Donut shellcode AMSI/WLDP/ETW Bypass options.",
-            group_name="Shellcode Options",
-            hide_conditions=[
-                HideCondition(name="output_type", operand=HideConditionOperand.NotEQ, value="Shellcode")
-            ],
-            ui_position=5
-        ),
-        BuildParameter(
-            name="adjust_filename",
-            parameter_type=BuildParameterType.Boolean,
-            default_value=False,
-            description="Automatically adjust payload extension based on selected choices.",
-            ui_position=3,
+            description="If outputting as shellcode, select the format."
         ),
         BuildParameter(
             name="debug",
             parameter_type=BuildParameterType.Boolean,
             default_value=False,
-            description="Create a DEBUG version.",
-            ui_position=2,
+            description="Create a DEBUG version."
         ),
         BuildParameter(
-            name="enable_keying",
+            name="adjust_filename",
             parameter_type=BuildParameterType.Boolean,
             default_value=False,
-            description="Enable environmental keying to restrict agent execution to specific systems.",
-            group_name="Keying Options",
-        ),
-        BuildParameter(
-            name="keying_method",
-            parameter_type=BuildParameterType.ChooseOne,
-            choices=["Hostname", "Domain", "Registry"],
-            default_value="Hostname",
-            description="Method of environmental keying.",
-            group_name="Keying Options",
-            hide_conditions=[
-                HideCondition(name="enable_keying", operand=HideConditionOperand.NotEQ, value=True)
-            ]
-        ),
-        BuildParameter(
-            name="keying_value",
-            parameter_type=BuildParameterType.String,
-            default_value="",
-            description="The hostname or domain name the agent should match (case-insensitive). Agent will exit if it doesn't match.",
-            group_name="Keying Options",
-            hide_conditions=[
-                HideCondition(name="enable_keying", operand=HideConditionOperand.NotEQ, value=True),
-                HideCondition(name="keying_method", operand=HideConditionOperand.EQ, value="Registry")
-            ]
-        ),
-        BuildParameter(
-            name="registry_path",
-            parameter_type=BuildParameterType.String,
-            default_value="",
-            description="Full registry path (e.g., HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProductName)",
-            group_name="Keying Options",
-            hide_conditions=[
-                HideCondition(name="enable_keying", operand=HideConditionOperand.NotEQ, value=True),
-                HideCondition(name="keying_method", operand=HideConditionOperand.NotEQ, value="Registry")
-            ]
-        ),
-        BuildParameter(
-            name="registry_value",
-            parameter_type=BuildParameterType.String,
-            default_value="",
-            description="The registry value to check against.",
-            group_name="Keying Options",
-            hide_conditions=[
-                HideCondition(name="enable_keying", operand=HideConditionOperand.NotEQ, value=True),
-                HideCondition(name="keying_method", operand=HideConditionOperand.NotEQ, value="Registry")
-            ]
-        ),
-        BuildParameter(
-            name="registry_comparison",
-            parameter_type=BuildParameterType.ChooseOne,
-            choices=["Matches", "Contains"],
-            default_value="Matches",
-            description="Matches (secure, hash-based) or Contains (WEAK, plaintext comparison). WARNING: Contains mode stores the value in plaintext!",
-            group_name="Keying Options",
-            hide_conditions=[
-                HideCondition(name="enable_keying", operand=HideConditionOperand.NotEQ, value=True),
-                HideCondition(name="keying_method", operand=HideConditionOperand.NotEQ, value="Registry")
-            ]
+            description="Automatically adjust payload extension based on selected choices."
         ),
     ]
 
     agent_path = pathlib.Path(".") / "nanaz" / "mythic"
     agent_code_path = pathlib.Path(".") / "nanaz" / "agent_code"
-    agent_icon_path = agent_path / "agent_functions" / "nanaz.svg"
+    agent_icon_path = pathlib.Path(".") / "nanaz" / "nanaz.svg"
 
     build_steps = [
         BuildStep(step_name="Gathering Files", step_description="Parsing options and generating config.json"),
@@ -156,75 +112,65 @@ A fully featured rust compatible training agent. Version: {}.
         resp = BuildResponse(status=BuildStatus.Error)
         build_msg = "=== 开始构建 Rust Agent ===\n"
 
+        print(f"\n[+] 收到 Mythic 构建请求 (UUID: {self.uuid})，开始执行...", flush=True)
+
         try:
             # =================================================================
             # 阶段 1: Gathering Files
             # =================================================================
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Gathering Files", StepStatus="Running"
-            ))
-
             output_type = self.get_parameter("output_type")
             shellcode_format = self.get_parameter("shellcode_format")
             adjust_filename_param = self.get_parameter("adjust_filename")
             debug_mode = self.get_parameter("debug")
 
-            enable_keying = self.get_parameter("enable_keying")
-            keying_method = self.get_parameter("keying_method")
-            keying_value = self.get_parameter("keying_value")
-            registry_path = self.get_parameter("registry_path")
-            registry_value = self.get_parameter("registry_value")
-            registry_comparison = self.get_parameter("registry_comparison")
+            target_os_raw = getattr(self, "selected_os", "Linux")
+            target_os = "Windows" if "windows" in str(target_os_raw).lower() else "Linux"
 
-            target_os = self.selected_os
-            build_msg += f"[*] 目标操作系统: {target_os}\n"
+            status_info = f"[*] 目标系统: {target_os} | 模式: {'DEBUG' if debug_mode else 'RELEASE'}"
+            build_msg += status_info + "\n"
+            print(f"[+] {status_info}", flush=True)
 
-            c2_config = {}
+            # 修复：将列表重构为纯字典（Map）结构，生成 "c2_profiles": { "http": {...} }
+            c2_profiles_map = {}
             for c2 in self.c2info:
                 profile = c2.get_c2profile()
                 profile_name = profile["name"]
 
                 if profile_name == "http":
-                    c2_config[profile_name] = {}
+                    profile_params = {}
                     for key, val in c2.get_parameters_dict().items():
                         if key == "AESPSK":
-                            c2_config[profile_name]["aes_psk"] = val.get("enc_key") if val.get("enc_key") is not None else ""
+                            profile_params["aes_psk"] = val.get("enc_key") if val is not None else ""
                         else:
-                            c2_config[profile_name][key] = val
+                            profile_params[key] = val
+
+                    # 用 profile 名称作为 Key 存入字典
+                    c2_profiles_map[profile_name] = profile_params
 
             rust_agent_config = {
-                "c2_profiles": c2_config,
+                "payload_uuid": self.uuid,
+                "c2_profiles": c2_profiles_map,
                 "build_options": {
                     "output_type": output_type,
                     "debug": debug_mode,
                     "target_os": target_os
                 },
-                "keying": {
-                    "enabled": enable_keying,
-                    "method": keying_method,
-                    "value": keying_value,
-                    "registry_path": registry_path,
-                    "registry_value": registry_value,
-                    "registry_comparison": registry_comparison
-                }
             }
 
+            self.agent_code_path.mkdir(parents=True, exist_ok=True)
             config_path = self.agent_code_path / "config.json"
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(rust_agent_config, f, indent=4)
 
             build_msg += f"[*] 成功写入配置文件: {config_path}\n"
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Gathering Files", StepStatus="Success"
-            ))
+            print(f"[+] 配置文件已写入: {config_path}", flush=True)
+
+            # 本阶段任务圆满结束，更新一次状态即可
+            await _update_step(self.uuid, "Gathering Files", True)
 
             # =================================================================
             # 阶段 2: Compiling
             # =================================================================
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Compiling", StepStatus="Running"
-            ))
-
             cargo_args = ["build"]
             if not debug_mode:
                 cargo_args.append("-r")
@@ -232,15 +178,16 @@ A fully featured rust compatible training agent. Version: {}.
             target_triple = None
             if target_os == "Windows":
                 target_triple = "x86_64-pc-windows-gnu"
-                cargo_args.extend(["--target", target_triple])
             elif target_os == "Linux":
                 target_triple = "x86_64-unknown-linux-musl"
+
+            if target_triple:
                 cargo_args.extend(["--target", target_triple])
 
             build_msg += f"[*] 执行编译命令: cargo {' '.join(cargo_args)}\n"
-            build_msg += f"[*] 编译工作目录: {self.agent_code_path.resolve()}\n"
+            print(f"[+] 启动工作目录: {self.agent_code_path.resolve()}", flush=True)
+            print(f"[+] 运行命令: cargo {' '.join(cargo_args)}", flush=True)
 
-            # 🔥 关键修改：将 stderr 重定向到 stdout，因为 Cargo 编译日志默认输出到 stderr
             process = await asyncio.create_subprocess_exec(
                 "cargo", *cargo_args,
                 cwd=str(self.agent_code_path),
@@ -248,28 +195,29 @@ A fully featured rust compatible training agent. Version: {}.
                 stderr=asyncio.subprocess.STDOUT
             )
 
-            # 实时读取所有的输出
-            stdout, _ = await process.communicate()
-            cargo_output = stdout.decode('utf-8', errors='ignore')
-            build_msg += f"\n--- Cargo 编译日志输出 ---\n{cargo_output}\n-------------------------\n"
+            build_msg += "\n--- Cargo 实时编译日志 ---\n"
+            print("[*] ---- Cargo 编译输出开始 ----", flush=True)
+
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                decoded_line = line.decode('utf-8', errors='ignore')
+                print(f"    {decoded_line.strip()}", flush=True)
+                build_msg += decoded_line
+
+            print("[*] ---- Cargo 编译输出结束 ----", flush=True)
+            await process.wait()
 
             if process.returncode != 0:
-                await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                    PayloadUUID=self.uuid, StepName="Compiling", StepStatus="Error"
-                ))
+                await _update_step(self.uuid, "Compiling", False)
                 raise Exception(f"Cargo 编译非正常退出，退出码: {process.returncode}")
 
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Compiling", StepStatus="Success"
-            ))
+            await _update_step(self.uuid, "Compiling", True)
 
             # =================================================================
             # 阶段 3: Processing Output
             # =================================================================
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Processing Output", StepStatus="Running"
-            ))
-
             rust_binary_name = "nanaz"
             profile_dir = "debug" if debug_mode else "release"
 
@@ -282,12 +230,11 @@ A fully featured rust compatible training agent. Version: {}.
                 binary_path = binary_path.with_suffix(".exe")
 
             build_msg += f"[*] 正在检索编译产物路径: {binary_path}\n"
+            print(f"[+] 正在检查产物: {binary_path}", flush=True)
 
             if not binary_path.exists():
-                await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                    PayloadUUID=self.uuid, StepName="Processing Output", StepStatus="Error"
-                ))
-                raise Exception(f"无法定位生成的二进制文件，请检查目标名称是否正确。预期路径: {binary_path}")
+                await _update_step(self.uuid, "Processing Output", False)
+                raise Exception(f"无法定位生成的二进制文件。预期路径: {binary_path}")
 
             if output_type == "Source":
                 zip_out_base = self.agent_code_path / "source"
@@ -295,23 +242,19 @@ A fully featured rust compatible training agent. Version: {}.
                 zip_path = self.agent_code_path / "source.zip"
                 with open(zip_path, "rb") as f:
                     resp.payload = f.read()
-                try: os.remove(zip_path)
-                except: pass
+                try:
+                    zip_path.unlink()
+                except Exception:
+                    pass
             else:
                 with open(binary_path, "rb") as f:
                     resp.payload = f.read()
 
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Processing Output", StepStatus="Success"
-            ))
+            await _update_step(self.uuid, "Processing Output", True)
 
             # =================================================================
             # 阶段 4: Finalizing
             # =================================================================
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Finalizing", StepStatus="Running"
-            ))
-
             resp.updated_filename = adjust_file_name(
                 filename=self.filename,
                 shellcode_format=shellcode_format,
@@ -321,39 +264,16 @@ A fully featured rust compatible training agent. Version: {}.
             )
 
             resp.status = BuildStatus.Success
-            # 将完整的编译成功日志同时放入 message 传给 Mythic 页面展示
-            resp.message = build_msg + f"\n[+] 构建成功! 目标环境: {target_os} ({profile_dir.upper()})"
+            resp.build_message = build_msg + f"\n[+] 构建成功! 目标环境: {target_os} ({profile_dir.upper()})"
+            print("[+] 构建全流程顺利结束！", flush=True)
 
-            await SendMythicRPCBuildStepUpdate(MythicRPCBuildStepUpdateMessage(
-                PayloadUUID=self.uuid, StepName="Finalizing", StepStatus="Success"
-            ))
+            await _update_step(self.uuid, "Finalizing", True)
 
         except Exception as p:
-            # 🔥 关键修改：失败时，不仅要把报错信息带上，前面收集到的 Cargo 日志也要塞进 error_message
-            build_msg += f"\n[!] 编译流程异常中断: {str(p)}"
+            err_msg = f"\n[!] 编译流程异常中断: {str(p)}\n{traceback.format_exc()}"
+            build_msg += err_msg
+            print(f"[-] 异常崩溃: {err_msg}", flush=True)
             resp.status = BuildStatus.Error
-            resp.error_message = build_msg
+            resp.build_message = build_msg
 
         return resp
-
-def adjust_file_name(filename, shellcode_format, output_type, adjust_filename, selected_os):
-    if not adjust_filename:
-        return filename
-    filename_pieces = filename.split(".")
-    original_filename = ".".join(filename_pieces[:-1])
-
-    if output_type == "Source":
-        return original_filename + ".zip"
-    elif output_type == "Shellcode":
-        if shellcode_format == "Binary": return original_filename + ".bin"
-        elif shellcode_format == "Base64": return original_filename + ".txt"
-        elif shellcode_format == "C": return original_filename + ".c"
-        elif shellcode_format == "Python": return original_filename + ".py"
-        elif shellcode_format == "Powershell": return original_filename + ".ps1"
-        else: return original_filename + ".txt"
-    else:
-        # 针对可执行文件或服务，根据选择的 OS 决定后缀
-        if selected_os == "Windows":
-            return original_filename + ".exe"
-        else:
-            return original_filename  # Linux 载荷通常没有后缀
