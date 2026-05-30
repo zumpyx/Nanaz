@@ -1,4 +1,2 @@
-pub mod http;
-mod metadata;
-
-pub use metadata::*;
+pub mod metadata;
+pub mod network;

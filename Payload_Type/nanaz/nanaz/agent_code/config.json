@@ -3,7 +3,7 @@
     "c2_profiles": [
         {
             "http": {
-                "aes_psk": null,
+                "aes_psk": "[REDACTED_AES_PSK]=",
                 "callback_host": "https://[REDACTED_CALLBACK_IP]",
                 "callback_interval": 10,
                 "callback_jitter": 23,

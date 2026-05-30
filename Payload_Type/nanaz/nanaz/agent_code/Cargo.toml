@@ -4,17 +4,30 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+mythic-c2 = { path = "/home/user/01-repo/mythic-c2" }
 serde = { version = "1.0.228", features = ["derive"] }
-snow = "0.10.0"
-data-encoding = "2.11.0"
-toml = "1.1.2"
 uuid = { version = "1.23", features = ["v4", "v7", "serde", "v4"] }
 serde_json = "1.0.150"
-# minreq = { version = "2.14.1", features = ["https-rustls", "serde_json"] }
 ureq = { version = "2.9", features = ["native-tls"] }
 native-tls = "0.2"
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
-[build-dependencies]
-# 🌟 关键：让编译脚本具备解析 JSON 的能力
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+[profile.dev]
+opt-level = 3          # 关键修改：从 "z" 改为 3，开启极致速度优化（计算大素数快数倍）
+lto = "fat"            # 开启全局胖链接优化，跨 crate 优化性能最强
+codegen-units = 1      # 限制编译单元为 1，让编译器能做更激进的全局优化
+# panic = "abort"        # 发生 panic 时直接终止，去掉异常展开代码，减小体积
+strip = "symbols"      # 剥离所有符号信息，大幅减小最终固件体积
+debug = false          # 关闭调试信息，减小体积
+incremental = false    # 关闭增量编译，确保编译器进行最彻底的全局优化
+
+
+[profile.release]
+opt-level = 3          # 关键修改：从 "z" 改为 3，开启极致速度优化（计算大素数快数倍）
+lto = "fat"            # 开启全局胖链接优化，跨 crate 优化性能最强
+codegen-units = 1      # 限制编译单元为 1，让编译器能做更激进的全局优化
+# panic = "abort"        # 发生 panic 时直接终止，去掉异常展开代码，减小体积
+strip = "symbols"      # 剥离所有符号信息，大幅减小最终固件体积
+debug = false          # 关闭调试信息，减小体积
+incremental = false    # 关闭增量编译，确保编译器进行最彻底的全局优化
