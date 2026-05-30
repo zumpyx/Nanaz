@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::sys::metadata;
 use crate::tasks;
-use crate::{set_killdate, set_sleep, DEBUG, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT};
+use crate::{DEBUG, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep};
 
 // ── Helpers ─────────────────────────────────────────────
 

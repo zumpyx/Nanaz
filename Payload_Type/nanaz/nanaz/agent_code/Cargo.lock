@@ -565,7 +565,9 @@ dependencies = [
 
 [[package]]
 name = "mythic-c2"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c046d10f71f6853d0b4848fd81315fb1938ac13e07db77d35261e9217f9a4f58"
 dependencies = [
  "aes",
  "base64",
