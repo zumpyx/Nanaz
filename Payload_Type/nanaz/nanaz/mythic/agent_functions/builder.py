@@ -205,8 +205,9 @@ class Nanaz(PayloadType):
             print(f"[+] 启动工作目录: {self.agent_code_path.resolve()}", flush=True)
             print(f"[+] 运行命令: cargo {' '.join(cargo_args)}", flush=True)
 
+            cargo_bin = "/usr/local/cargo/bin/cargo"
             process = await asyncio.create_subprocess_exec(
-                "cargo",
+                cargo_bin,
                 *cargo_args,
                 cwd=str(self.agent_code_path),
                 stdout=asyncio.subprocess.PIPE,

@@ -13,7 +13,7 @@ WORKDIR /Mythic/
 COPY [".", "."]
 
 RUN cd nanaz/agent_code && \
-    . "$HOME/.cargo/env" && \
+    . "$CARGO_HOME/env" && \
     rustup target add x86_64-pc-windows-gnu && \
     rustup target add x86_64-unknown-linux-gnu && \
     rustup target add x86_64-unknown-linux-musl && \
