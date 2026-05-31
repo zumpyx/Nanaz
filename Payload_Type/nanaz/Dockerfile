@@ -23,6 +23,8 @@ RUN cd nanaz/agent_code && \
     rustup target add x86_64-pc-windows-gnu && \
     rustup target add x86_64-unknown-linux-gnu && \
     rustup target add x86_64-unknown-linux-musl && \
-    cargo fetch
+    cargo fetch && \
+    cargo build && \
+    cargo build -r
 
 CMD ["python3", "main.py"]
