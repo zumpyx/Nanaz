@@ -188,7 +188,7 @@ class Nanaz(PayloadType):
             # =================================================================
             # 阶段 2: Compiling
             # =================================================================
-            cargo_args = ["build"]
+            cargo_args = ["zigbuild"]
             if not debug_mode:
                 cargo_args.append("-r")
 

@@ -5,13 +5,12 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-RUN chmod -R a+w $RUSTUP_HOME $CARGO_HOME
+RUN curl https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz && \
+    tar -xvf /tmp/zig.tar.xz -C /tmp && \
+    mv /tmp/zig-x86_64-linux-0.16.0 /usr/local/zig && \
+    ln -s /usr/local/zig/zig /usr/local/cargo/bin/zig
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        mingw-w64 \
-        musl-tools \
-    && rm -rf /var/lib/apt/lists/*
+RUN chmod -R a+w $RUSTUP_HOME $CARGO_HOME
 
 RUN python -m pip install cryptography
 
@@ -23,6 +22,7 @@ RUN cd nanaz/agent_code && \
     rustup target add x86_64-pc-windows-gnu && \
     rustup target add x86_64-unknown-linux-gnu && \
     rustup target add x86_64-unknown-linux-musl && \
+    cargo install cargo-zigbuild && \
     cargo fetch && \
     cargo build && \
     cargo build -r
