@@ -3,7 +3,7 @@ use core::sync::atomic::Ordering;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::SHOULD_EXIT;
+use crate::{EXIT_PROCESS, SHOULD_EXIT};
 
 #[derive(Deserialize)]
 struct Params {
@@ -22,8 +22,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match method.as_str() {
         "process" => {
-            println!("[exit] terminating process");
-            std::process::exit(0);
+            println!("[exit] scheduling process termination after response flush");
+            SHOULD_EXIT.store(true, Ordering::Relaxed);
+            EXIT_PROCESS.store(true, Ordering::Relaxed);
+            TaskResponse {
+                task_id: task.id,
+                completed: Some(true),
+                status: Some("completed".into()),
+                user_output: Some("agent process exiting".into()),
+                ..Default::default()
+            }
         }
         "thread" => {
             println!("[exit] stopping beacon loop");

