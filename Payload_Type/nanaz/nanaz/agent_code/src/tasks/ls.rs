@@ -24,6 +24,8 @@ use serde_json::Value;
 struct Params {
     path: String,
     #[serde(default)]
+    recursive: bool,
+    #[serde(default)]
     #[allow(dead_code)]
     host: Option<String>,
 }
@@ -54,6 +56,83 @@ fn permissions_value(meta: &fs::Metadata) -> Option<Value> {
 #[cfg(not(unix))]
 fn permissions_value(_meta: &fs::Metadata) -> Option<Value> {
     None
+}
+
+// ── Listing helpers ────────────────────────────────────────
+
+/// Build a FileBrowserEntry for a single directory entry.
+fn entry_from_direntry(
+    entry: &fs::DirEntry,
+    path_prefix: &str,
+) -> Option<FileBrowserEntry> {
+    let name = entry.file_name().to_string_lossy().to_string();
+    let is_file = entry
+        .file_type()
+        .map(|ft| ft.is_file() || (!ft.is_dir() && !ft.is_symlink()))
+        .unwrap_or(true);
+    let child_meta = entry.metadata().ok();
+    let display_name = if path_prefix.is_empty() {
+        name
+    } else {
+        format!("{path_prefix}/{name}")
+    };
+    Some(FileBrowserEntry {
+        is_file,
+        name: display_name,
+        size: child_meta.as_ref().map(|m| m.len() as i64),
+        access_time: child_meta
+            .as_ref()
+            .and_then(|m| m.accessed().ok())
+            .and_then(to_millis),
+        modify_time: child_meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(to_millis),
+        permissions: child_meta.as_ref().and_then(|m| permissions_value(m)),
+        ..Default::default()
+    })
+}
+
+/// Flat listing: immediate children only.
+fn list_dir_flat(dir: &Path) -> Result<Vec<FileBrowserEntry>, String> {
+    let rd = fs::read_dir(dir)
+        .map_err(|e| format!("read_dir {} failed: {e}", dir.display()))?;
+    let mut files = Vec::new();
+    for entry in rd.flatten() {
+        if let Some(fb) = entry_from_direntry(&entry, "") {
+            files.push(fb);
+        }
+    }
+    Ok(files)
+}
+
+/// Recursive walk: collect all files and dirs with relative paths.
+fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
+    let mut files = Vec::new();
+    let mut dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
+    dirs.push((root.to_path_buf(), String::new()));
+
+    while let Some((dir, prefix)) = dirs.pop() {
+        let rd = fs::read_dir(&dir)
+            .map_err(|e| format!("read_dir {} failed: {e}", dir.display()))?;
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(fb) = entry_from_direntry(&entry, &prefix) {
+                let is_file = fb.is_file;
+                files.push(fb);
+                if !is_file {
+                    let child_prefix = if prefix.is_empty() {
+                        name
+                    } else {
+                        format!("{prefix}/{name}")
+                    };
+                    dirs.push((entry.path(), child_prefix));
+                }
+            }
+        }
+    }
+
+    Ok(files)
 }
 
 // ── Main handler ────────────────────────────────────────────
@@ -129,44 +208,19 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             ..Default::default()
         }
     } else {
-        // Directory listing
-        let children = match fs::read_dir(&resolved) {
-            Ok(rd) => rd,
-            Err(e) => {
-                return TaskResponse::failed(
-                    task.id,
-                    &format!("read_dir {} failed: {e}", resolved.display()),
-                );
-            }
+        // Directory listing — walk recursively if requested
+        let children = if params.recursive {
+            walk_dir_recursive(&resolved)
+        } else {
+            list_dir_flat(&resolved)
+        };
+        let files = match children {
+            Ok(f) => f,
+            Err(e) => return TaskResponse::failed(task.id, &e),
         };
 
-        let mut files: Vec<FileBrowserEntry> = Vec::new();
-        for entry in children.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let is_file = entry
-                .file_type()
-                .map(|ft| ft.is_file() || (!ft.is_dir() && !ft.is_symlink()))
-                .unwrap_or(true); // assume file if we can't tell
-            let child_meta = entry.metadata().ok();
-
-            files.push(FileBrowserEntry {
-                is_file,
-                name,
-                size: child_meta.as_ref().map(|m| m.len() as i64),
-                access_time: child_meta
-                    .as_ref()
-                    .and_then(|m| m.accessed().ok())
-                    .and_then(to_millis),
-                modify_time: child_meta
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(to_millis),
-                permissions: child_meta.as_ref().and_then(|m| permissions_value(m)),
-                ..Default::default()
-            });
-        }
-
         // Sort: directories first, then files, both alphabetical
+        let mut files = files;
         files.sort_by(|a, b| {
             b.is_file.cmp(&a.is_file)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))

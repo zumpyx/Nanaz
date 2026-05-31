@@ -21,11 +21,19 @@ class LsArguments(TaskArguments):
                 ],
             ),
             CommandParameter(
+                name="recursive",
+                type=ParameterType.Boolean,
+                default_value=False,
+                parameter_group_info=[
+                    ParameterGroupInfo(ui_position=1, required=False)
+                ],
+            ),
+            CommandParameter(
                 name="host",
                 type=ParameterType.String,
                 default_value="",
                 parameter_group_info=[
-                    ParameterGroupInfo(ui_position=1, required=False)
+                    ParameterGroupInfo(ui_position=2, required=False)
                 ],
             ),
         ]
@@ -81,7 +89,9 @@ class LsCommand(CommandBase):
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
-        response.DisplayParams = taskData.args.get_arg("path")
+        path = taskData.args.get_arg("path")
+        rec = taskData.args.get_arg("recursive")
+        response.DisplayParams = f"{path}" + (" -r" if rec else "")
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:

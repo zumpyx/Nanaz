@@ -238,18 +238,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match list_processes() {
         Ok(mut procs) => {
-            // Resolve host: use provided, or try to detect from system
-            let host = params.host
-                .filter(|h| !h.is_empty())
-                .or_else(|| {
-                    crate::sys::metadata::hostname()
-                })
-                .unwrap_or_default();
+            // Only set host if explicitly provided; otherwise let Mythic auto-fill
+            let host = params.host.filter(|h| !h.is_empty()).unwrap_or_default();
 
-            // Set host + mark for auto-cleanup on all entries
+            // Mark for auto-cleanup on all entries
             for p in &mut procs {
                 p.update_deleted = true;
-                p.host = host.clone();
+                if !host.is_empty() {
+                    p.host = host.clone();
+                }
+                // host left empty → Mythic fills from callback info
             }
 
             let count = procs.len();
