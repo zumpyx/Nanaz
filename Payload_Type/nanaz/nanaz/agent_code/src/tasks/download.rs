@@ -16,7 +16,7 @@ use std::path::Path;
 use mythic::{TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::sys::encoding::encode_b64;
+use crate::common::base64::encode as encode_b64;
 
 // ── Params ──────────────────────────────────────────────────
 

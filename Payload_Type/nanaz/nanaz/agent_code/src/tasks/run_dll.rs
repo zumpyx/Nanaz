@@ -16,7 +16,8 @@
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::sys::encoding::{decode_b64, temp_path};
+use crate::common::base64::decode as decode_b64;
+use crate::sys::temp_path;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -192,9 +193,8 @@ mod tests {
 
     #[test]
     fn test_decode_b64_roundtrip() {
-        use base64::Engine;
         let data = b"hello world";
-        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        let encoded = crate::common::base64::encode(data);
         let decoded = decode_b64(&encoded).unwrap();
         assert_eq!(decoded, data);
     }

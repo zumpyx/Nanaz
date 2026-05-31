@@ -1,5 +1,8 @@
+extern crate alloc;
+
 mod agent;
 mod c2;
+mod common;
 mod config;
 mod error;
 pub use error::{Error, Result};

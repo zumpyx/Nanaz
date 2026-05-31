@@ -21,7 +21,8 @@
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::sys::encoding::{decode_b64, temp_path};
+use crate::common::base64::decode as decode_b64;
+use crate::sys::temp_path;
 
 // ── Params ──────────────────────────────────────────────────
 

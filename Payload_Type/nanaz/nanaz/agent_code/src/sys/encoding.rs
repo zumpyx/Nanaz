@@ -1,9 +1,9 @@
-//! Shared utilities: encoding detection, base64 codec, temp-path building.
+//! System encoding detection for child-process output.
 //!
 //! On Windows, command output is typically in the system's ANSI code page
 //! (e.g. GBK/CP936 for Chinese, Shift-JIS/CP932 for Japanese), not UTF-8.
-//! This module provides `decode_output()` which tries UTF-8 first and falls
-//! back to the system locale encoding when replacement characters are detected.
+//! `decode_output()` tries UTF-8 first and falls back to the system locale
+//! encoding when replacement characters are detected.
 
 /// Decode raw bytes from a child process into a String.
 ///
@@ -82,44 +82,6 @@ mod windows_acp {
     unsafe extern "system" {
         pub fn GetACP() -> u32;
     }
-}
-
-// ── Base64 helpers ──────────────────────────────────────────
-
-/// Decode a base64 string into raw bytes.
-pub fn decode_b64(s: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s.trim())
-        .map_err(|e| format!("base64 decode failed: {e}"))
-}
-
-/// Encode raw bytes as a base64 string.
-pub fn encode_b64(data: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
-
-// ── Temp-path helper ────────────────────────────────────────
-
-/// Build a temp file path from a filename, sanitising path separators.
-#[cfg(windows)]
-pub fn temp_path(name: &str) -> String {
-    let safe = std::path::Path::new(name)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.to_string());
-    let tmp = std::env::var("TEMP").unwrap_or_else(|_| "C:\\Windows\\Temp".into());
-    format!("{}\\{}", tmp.trim_end_matches('\\'), safe)
-}
-
-#[cfg(unix)]
-pub fn temp_path(name: &str) -> String {
-    let safe = std::path::Path::new(name)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.to_string());
-    format!("/tmp/{safe}")
 }
 
 // ── Tests ───────────────────────────────────────────────────
