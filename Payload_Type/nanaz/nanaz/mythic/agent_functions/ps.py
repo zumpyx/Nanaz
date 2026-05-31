@@ -1,5 +1,11 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
+from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
+    MythicRPCTaskUpdateMessage,
+    SendMythicRPCTaskUpdate,
+)
 
 
 class PsArguments(TaskArguments):
@@ -58,4 +64,30 @@ class PsCommand(CommandBase):
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
         resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        # Format processes structured data into human-readable output
+        if isinstance(response, dict) and "processes" in response:
+            procs = response["processes"]
+            if procs:
+                lines = [f"{'PID':<8} {'PPID':<8} {'NAME':<24} CMDLINE"]
+                lines.append("-" * 72)
+                for p in procs[:40]:
+                    name = p.get("name", "")
+                    if len(name) > 24:
+                        name = name[:23] + "…"
+                    cmd = p.get("command_line") or "-"
+                    if len(cmd) > 40:
+                        cmd = cmd[:39] + "…"
+                    lines.append(
+                        f"{p.get('process_id', 0):<8} "
+                        f"{str(p.get('parent_process_id', '-')):<8} "
+                        f"{name:<24} "
+                        f"{cmd}"
+                    )
+                if len(procs) > 40:
+                    lines.append(f"… and {len(procs) - 40} more")
+                lines.append(f"── {len(procs)} processes ──")
+                output = "\n".join(lines)
+                await SendMythicRPCTaskUpdate(
+                    MythicRPCTaskUpdateMessage(TaskID=task.Task.ID, UpdateStdout=output)
+                )
         return resp

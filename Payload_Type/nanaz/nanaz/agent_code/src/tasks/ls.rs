@@ -172,25 +172,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
-        // Build formatted output for the interact window
-        let dir_label = resolved.display().to_string();
-        let mut out = format!("Listing: {dir_label}\n");
-        for f in &files {
-            let icon = if f.is_file { "📄" } else { "📁" };
-            let size = f.size.map_or("-".into(), |s| {
-                if s < 1024 { format!("{s}B") }
-                else if s < 1048576 { format!("{}KB", s/1024) }
-                else { format!("{}MB", s/1048576) }
-            });
-            out.push_str(&format!("  {icon}  {:<40}  {size:>8}\n", f.name));
-        }
-        out.push_str(&format!("── {} entries ──", files.len()));
-
+        let count = files.len();
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(out),
+            user_output: Some(format!("{count} entries")),
             file_browser: Some(FileBrowserEntry {
                 is_file: false,
                 name: resolved

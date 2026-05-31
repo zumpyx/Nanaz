@@ -2,6 +2,10 @@ import json
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
+from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
+    MythicRPCTaskUpdateMessage,
+    SendMythicRPCTaskUpdate,
+)
 
 
 class LsArguments(TaskArguments):
@@ -81,4 +85,26 @@ class LsCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        # Format file_browser structured data into JSON output for the interact window
+        if isinstance(response, dict):
+            fb = response.get("file_browser")
+            if fb and fb.get("files"):
+                lines = []
+                for f in fb["files"]:
+                    icon = "DIR " if not f.get("is_file") else "FILE"
+                    sz = f.get("size") or 0
+                    if sz < 1024:
+                        size_str = f"{sz}B"
+                    elif sz < 1048576:
+                        size_str = f"{sz//1024}KB"
+                    else:
+                        size_str = f"{sz//1048576}MB"
+                    lines.append(f"  {icon}  {f.get('name', ''):<40}  {size_str:>8}")
+                output = f"Listing: {fb.get('parent_path', '')}/{fb.get('name', '')}\n"
+                output += "\n".join(lines)
+                output += f"\n── {len(fb['files'])} entries ──"
+                await SendMythicRPCTaskUpdate(
+                    MythicRPCTaskUpdateMessage(TaskID=task.Task.ID, UpdateStdout=output)
+                )
+        return resp
