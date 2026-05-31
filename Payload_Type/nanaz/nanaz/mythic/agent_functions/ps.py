@@ -1,5 +1,3 @@
-import json
-
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (

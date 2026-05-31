@@ -1,5 +1,3 @@
-import json
-
 from mythic_container.MythicCommandBase import *
 
 

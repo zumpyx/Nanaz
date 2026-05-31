@@ -1,6 +1,5 @@
 import base64
 import json
-import os
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
@@ -43,6 +42,9 @@ class UploadArguments(TaskArguments):
                 data = json.loads(cl)
                 if "host" in data and data.get("full_path"):
                     self.set_arg("path", data["full_path"])
+                    return
+                elif "path" in data:
+                    self.set_arg("path", data["path"])
                     return
             except Exception:
                 pass

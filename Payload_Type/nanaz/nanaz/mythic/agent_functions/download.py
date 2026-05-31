@@ -1,5 +1,4 @@
 import json
-import os
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
@@ -43,6 +42,9 @@ class DownloadArguments(TaskArguments):
                     self.set_arg("path", data["full_path"])
                     if data.get("host"):
                         self.set_arg("host", data["host"])
+                    return
+                elif "path" in data:
+                    self.set_arg("path", data["path"])
                     return
             except Exception:
                 pass

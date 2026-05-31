@@ -26,22 +26,50 @@ struct NetEntry {
 // ── Linux: parse /proc/net ──────────────────────────────────
 
 #[cfg(target_os = "linux")]
-fn ip_to_string(ip: u32) -> String {
+fn ip_to_string_v4(ip: u32) -> String {
     let b = ip.to_ne_bytes();
     format!("{}.{}.{}.{}", b[0], b[1], b[2], b[3])
 }
 
 #[cfg(target_os = "linux")]
-fn hex_to_ip(s: &str) -> (String, u16) {
-    let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 2 {
-        return ("0.0.0.0".into(), 0);
+fn hex_to_ipv6(s: &str) -> String {
+    // /proc/net/tcp6 stores IPv6 as 4 groups of 8 hex chars (32 chars total), big-endian
+    if s.len() != 32 {
+        return "::".into();
     }
-    let ip = u32::from_str_radix(parts[0], 16)
-        .map(|n| n.swap_bytes())
-        .map(|n| ip_to_string(n))
-        .unwrap_or_else(|_| "0.0.0.0".into());
-    let port = u16::from_str_radix(parts[1], 16).unwrap_or(0);
+    let mut groups = Vec::new();
+    for i in (0..32).step_by(4) {
+        groups.push(u16::from_str_radix(&s[i..i + 4], 16).unwrap_or(0));
+    }
+    // Format as compressed IPv6
+    format!(
+        "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+        groups[0], groups[1], groups[2], groups[3],
+        groups[4], groups[5], groups[6], groups[7],
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn hex_to_ip(s: &str) -> (String, u16) {
+    // /proc/net/tcp:  "0100007F:0050" (8+4 hex chars, IPv4)
+    // /proc/net/tcp6: "0000000000000000FFFF00000100007F:0050" (32+4, IPv6 or v4-mapped)
+    let colon = s.rfind(':').unwrap_or(s.len());
+    let addr = &s[..colon];
+    let port = u16::from_str_radix(&s[colon + 1..], 16).unwrap_or(0);
+
+    let ip = match addr.len() {
+        8 => {
+            // IPv4
+            u32::from_str_radix(addr, 16)
+                .map(|n| ip_to_string_v4(n.swap_bytes()))
+                .unwrap_or_else(|_| "0.0.0.0".into())
+        }
+        32 => {
+            // IPv6 (possibly IPv4-mapped)
+            hex_to_ipv6(addr)
+        }
+        _ => "0.0.0.0".into(),
+    };
     (ip, port)
 }
 

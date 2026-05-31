@@ -92,9 +92,9 @@ fn past_killdate() -> bool {
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    now > kd
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now >= kd
 }
 
 fn parse_killdate_ts(s: &str) -> u64 {
@@ -114,6 +114,10 @@ pub fn run(config: Config) -> MythicResult<()> {
     println!("[*] Agent start, payload_uuid={}", payload_uuid);
 
     let profiles = config.c2_profiles;
+    if profiles.is_empty() {
+        eprintln!("[!] no C2 profiles configured, exiting");
+        return Ok(());
+    }
     let mythic = get_agent(payload_uuid, &profiles)?;
 
     set_sleep(

@@ -2,12 +2,11 @@ mod agent;
 mod c2;
 mod config;
 mod error;
+pub use error::{Error, Result};
 mod sys;
 mod tasks;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-
-use error::{Error, Result};
 
 const RAW_JSON: &str = include_str!("../config.json");
 

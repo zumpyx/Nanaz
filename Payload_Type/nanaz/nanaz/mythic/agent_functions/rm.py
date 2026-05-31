@@ -39,6 +39,9 @@ class RmArguments(TaskArguments):
                 if "host" in data and data.get("full_path"):
                     self.set_arg("path", data["full_path"])
                     return
+                elif "path" in data:
+                    self.set_arg("path", data["path"])
+                    return
             except Exception:
                 pass
         parts = cl.split(maxsplit=1)
