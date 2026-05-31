@@ -26,6 +26,7 @@ class SleepArguments(TaskArguments):
                         required=False,
                     )
                 ],
+                description="Jitter percentage (0–100). Extra sleep = interval * jitter% * random.",
             ),
         ]
 

@@ -1,4 +1,5 @@
 //! Move/rename a file — cross-platform via std::fs::rename.
+//! Falls back to copy + delete when crossing filesystem boundaries.
 
 use std::path::Path;
 
@@ -35,6 +36,44 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: Some(format!("moved {} → {}", src.display(), dst.display())),
             ..Default::default()
         },
-        Err(e) => TaskResponse::failed(task.id, &format!("rename {} → {} failed: {e}", src.display(), dst.display())),
+        Err(e) if e.raw_os_error() == Some(18) /* EXDEV: cross-device link */ => {
+            // Filesystem boundary — fall back to copy + delete
+            match std::fs::copy(src, dst) {
+                Ok(n) => match std::fs::remove_file(src) {
+                    Ok(_) => TaskResponse {
+                        task_id: task.id,
+                        completed: Some(true),
+                        status: Some("completed".into()),
+                        user_output: Some(format!(
+                            "moved (copy+delete) {} → {} ({} bytes)",
+                            src.display(),
+                            dst.display(),
+                            n
+                        )),
+                        ..Default::default()
+                    },
+                    Err(e) => TaskResponse::failed(
+                        task.id,
+                        &format!(
+                            "copied {} → {} but failed to remove source: {e}",
+                            src.display(),
+                            dst.display()
+                        ),
+                    ),
+                },
+                Err(e) => TaskResponse::failed(
+                    task.id,
+                    &format!(
+                        "rename and copy both failed for {} → {}: {e}",
+                        src.display(),
+                        dst.display()
+                    ),
+                ),
+            }
+        }
+        Err(e) => TaskResponse::failed(
+            task.id,
+            &format!("rename {} → {} failed: {e}", src.display(), dst.display()),
+        ),
     }
 }

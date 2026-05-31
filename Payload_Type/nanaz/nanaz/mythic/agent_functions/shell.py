@@ -28,6 +28,17 @@ class ShellArguments(TaskArguments):
                     )
                 ],
             ),
+            CommandParameter(
+                name="timeout",
+                type=ParameterType.Number,
+                default_value=60,
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        ui_position=2,
+                        required=False,
+                    )
+                ],
+            ),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):
@@ -43,7 +54,7 @@ class ShellCommand(CommandBase):
     cmd = "shell"
     needs_admin = False
     help_cmd = "shell [command]"
-    description = "Execute a shell command via cmd / powershell / bash / sh."
+    description = "Execute a shell command with timeout (default 60s)."
     version = 1
     author = "@zumpyx"
     argument_class = ShellArguments
@@ -65,7 +76,8 @@ class ShellCommand(CommandBase):
         )
         command = taskData.args.get_arg("command")
         shell = taskData.args.get_arg("shell")
-        response.DisplayParams = f"-shell {shell} {command}"
+        timeout = taskData.args.get_arg("timeout")
+        response.DisplayParams = f"-shell {shell} -timeout {timeout} {command}"
         return response
 
     async def process_response(
