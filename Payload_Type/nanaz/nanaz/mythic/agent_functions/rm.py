@@ -59,13 +59,13 @@ class RmCommand(CommandBase):
     author = "@zumpyx"
     argument_class = RmArguments
     attackmapping = ["T1070"]
+    supported_ui_features = ["file_browser:remove"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
         suggested_command=False,
-        supported_ui_features=["file_browser:remove"],
     )
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:

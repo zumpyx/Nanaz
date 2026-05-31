@@ -70,13 +70,13 @@ class LsCommand(CommandBase):
     author = "@zumpyx"
     argument_class = LsArguments
     attackmapping = ["T1083", "T1105"]
+    supported_ui_features = ["file_browser:list"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
         suggested_command=False,
-        supported_ui_features=["file_browser:list"],
     )
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:

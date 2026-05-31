@@ -62,13 +62,13 @@ class UploadCommand(CommandBase):
     author = "@zumpyx"
     argument_class = UploadArguments
     attackmapping = ["T1105", "T1036"]
+    supported_ui_features = ["file_browser:upload"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
         suggested_command=False,
-        supported_ui_features=["file_browser:upload"],
     )
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:

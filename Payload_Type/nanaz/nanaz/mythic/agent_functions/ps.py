@@ -39,13 +39,13 @@ class PsCommand(CommandBase):
     author = "@zumpyx"
     argument_class = PsArguments
     attackmapping = ["T1057"]
+    supported_ui_features = ["process_browser:list"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
         suggested_command=False,
-        supported_ui_features=["process_browser:list"],
     )
 
     async def create_go_tasking(
