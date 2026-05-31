@@ -45,10 +45,10 @@ fn decode_with_acp(bytes: &[u8]) -> Option<String> {
     let label = code_page_label(acp)?;
     let (decoded, _encoding, had_errors) = encoding_rs::Encoding::for_label(label.as_bytes())?.decode(bytes);
     if had_errors {
-        // Fall back to replacement-based decode
-        let (decoded, _) = encoding_rs::Encoding::for_label(label.as_bytes())?
-            .decode_without_bom_handling_and_without_replacement(bytes);
-        Some(decoded.into_owned())
+        // Fall back to replacement-based decode (returns Option<Cow<str>>)
+        encoding_rs::Encoding::for_label(label.as_bytes())?
+            .decode_without_bom_handling_and_without_replacement(bytes)
+            .map(|c| c.into_owned())
     } else {
         Some(decoded.into_owned())
     }
