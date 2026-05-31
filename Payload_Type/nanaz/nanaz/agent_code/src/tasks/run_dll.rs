@@ -16,6 +16,8 @@
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::sys::encoding::{decode_b64, temp_path};
+
 // ── Params ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -69,29 +71,6 @@ mod ffi {
 
 /// BOF/DLL convention: `void go(char *args, int len)` — C calling convention.
 type EntryFn = unsafe extern "C" fn(*const u8, i32);
-
-// ── Helpers ─────────────────────────────────────────────────
-
-/// Decode base64, optionally with or without padding.
-fn decode_b64(s: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s.trim())
-        .map_err(|e| format!("base64 decode failed: {e}"))
-}
-
-/// Build a temp file path from a filename.
-#[cfg(windows)]
-pub fn temp_path(name: &str) -> String {
-    use std::env;
-    let tmp = env::var("TEMP").unwrap_or_else(|_| "C:\\Windows\\Temp".into());
-    format!("{}\\{name}", tmp.trim_end_matches('\\'))
-}
-
-#[cfg(unix)]
-pub fn temp_path(name: &str) -> String {
-    format!("/tmp/{name}")
-}
 
 // ── Main handler ────────────────────────────────────────────
 

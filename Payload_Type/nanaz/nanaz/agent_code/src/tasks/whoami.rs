@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[derive(Deserialize, Default)]
 struct Params {
     #[serde(default)]
+    #[allow(dead_code)]
     host: Option<String>,
 }
 
@@ -19,12 +20,10 @@ fn run_cmd(bin: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
-    let params = match serde_json::from_str::<Params>(&task.parameters) {
+    let _params = match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => p,
         Err(_) => Params::default(),
     };
-
-    let _host = params.host;
 
     #[cfg(windows)]
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into());

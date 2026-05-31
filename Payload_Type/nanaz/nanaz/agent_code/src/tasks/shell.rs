@@ -43,7 +43,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         ..Default::default()
                     }
                 }
-                Err(e) => TaskResponse::failed(task.id, &format!("shell failed: {e}")),
+                Err(e) => TaskResponse::failed(task.id, &format!("{} failed: {e}", bin)),
             }
         }
         Err(e) => TaskResponse::failed(task.id, &format!("shell parse error: {e}")),

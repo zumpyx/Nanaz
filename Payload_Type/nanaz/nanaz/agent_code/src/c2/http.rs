@@ -27,27 +27,6 @@ pub struct HttpProfile {
     pub query_path_name: String,
 }
 
-impl Default for HttpProfile {
-    fn default() -> Self {
-        Self {
-            aes_psk: Some(String::new()),
-            callback_host: String::new(),
-            callback_interval: 0,
-            callback_jitter: 0,
-            callback_port: 0,
-            encrypted_exchange_check: false,
-            get_uri: String::new(),
-            headers: HashMap::new(),
-            killdate: String::new(),
-            post_uri: String::new(),
-            proxy_host: String::new(),
-            proxy_pass: String::new(),
-            proxy_port: String::new(),
-            proxy_user: String::new(),
-            query_path_name: String::new(),
-        }
-    }
-}
 
 /// Percent-encode bytes that aren't URL-safe.
 fn url_encode(s: &str) -> String {
