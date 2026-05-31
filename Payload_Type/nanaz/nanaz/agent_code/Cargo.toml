@@ -13,6 +13,7 @@ native-tls = "0.2"
 rand = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.22"
+encoding_rs = "0.8"
 
 [profile.dev]
 opt-level = 3          # 关键修改：从 "z" 改为 3，开启极致速度优化（计算大素数快数倍）

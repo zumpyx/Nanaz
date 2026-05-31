@@ -3,6 +3,8 @@ use std::process::Command;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::sys::encoding::decode_output;
+
 #[derive(Deserialize)]
 struct Params {
     command: String,
@@ -26,10 +28,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             };
             match Command::new(bin).arg(flag).arg(&p.command).output() {
                 Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    let stdout = decode_output(&out.stdout);
+                    let stderr = decode_output(&out.stderr);
                     let output = if stderr.is_empty() {
-                        stdout.to_string()
+                        stdout
                     } else {
                         format!("{stdout}\n{stderr}")
                     };
