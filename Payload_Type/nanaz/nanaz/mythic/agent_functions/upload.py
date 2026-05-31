@@ -79,7 +79,7 @@ class UploadCommand(CommandBase):
 
         try:
             file_resp = await SendMythicRPCFileGetContent(
-                MythicRPCFileGetContentMessage(AgentFileID=file_uuid)
+                MythicRPCFileGetContentMessage(file_uuid)
             )
             if file_resp.Success and file_resp.Content is not None:
                 encoded = base64.b64encode(file_resp.Content).decode("utf-8")
