@@ -1,5 +1,4 @@
-import base64
-import os
+import json
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
@@ -38,10 +37,29 @@ class LsArguments(TaskArguments):
 
     async def parse_arguments(self):
         if len(self.command_line) == 0:
-            # called from file browser UI — use default "."
             self.set_arg("path", ".")
             return
-        self.set_arg("path", self.command_line.strip())
+        # Handle file browser UI tasking: {"host":..., "path":..., "file":..., "full_path":...}
+        cl = self.command_line.strip()
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+                if "host" in data:
+                    # File browser sends path=parent, file=name, full_path=absolute
+                    if data.get("full_path"):
+                        self.set_arg("path", data["full_path"])
+                    elif data.get("path"):
+                        fname = data.get("file", "")
+                        self.set_arg("path", data["path"].rstrip("/") + "/" + fname)
+                    if data.get("host"):
+                        self.set_arg("host", data["host"])
+                    return
+                elif "path" in data:
+                    self.set_arg("path", data["path"])
+                    return
+            except Exception:
+                pass
+        self.set_arg("path", cl)
 
 
 class LsCommand(CommandBase):

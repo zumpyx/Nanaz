@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 
 from mythic_container.MythicCommandBase import *
@@ -47,9 +48,19 @@ class UploadArguments(TaskArguments):
         self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
-        if len(self.command_line) == 0:
+        cl = self.command_line.strip()
+        # Handle file browser UI tasking context
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+                if "host" in data and data.get("full_path"):
+                    self.set_arg("path", data["full_path"])
+                    return
+            except Exception:
+                pass
+        if len(cl) == 0:
             raise Exception("upload requires a destination path.")
-        self.set_arg("path", self.command_line.strip())
+        self.set_arg("path", cl)
 
 
 class UploadCommand(CommandBase):

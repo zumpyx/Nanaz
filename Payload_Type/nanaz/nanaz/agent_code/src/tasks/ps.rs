@@ -238,9 +238,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match list_processes() {
         Ok(mut procs) => {
-            // Set host on all entries if provided
-            if let Some(ref host) = params.host {
-                for p in &mut procs {
+            // Set host + mark for auto-cleanup on all entries
+            for p in &mut procs {
+                p.update_deleted = true;
+                if let Some(ref host) = params.host {
                     p.host = host.clone();
                 }
             }

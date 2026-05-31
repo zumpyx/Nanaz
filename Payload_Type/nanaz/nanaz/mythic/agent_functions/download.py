@@ -1,3 +1,4 @@
+import json
 import os
 
 from mythic_container.MythicCommandBase import *
@@ -38,7 +39,19 @@ class DownloadArguments(TaskArguments):
     async def parse_arguments(self):
         if len(self.command_line) == 0:
             raise Exception("download requires a file path.")
-        self.set_arg("path", self.command_line.strip())
+        # Handle file browser UI tasking: {"host":..., "path":..., "file":..., "full_path":...}
+        cl = self.command_line.strip()
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+                if "host" in data and data.get("full_path"):
+                    self.set_arg("path", data["full_path"])
+                    if data.get("host"):
+                        self.set_arg("host", data["host"])
+                    return
+            except Exception:
+                pass
+        self.set_arg("path", cl)
 
 
 class DownloadCommand(CommandBase):

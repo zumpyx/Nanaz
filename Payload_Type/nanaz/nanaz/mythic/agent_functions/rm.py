@@ -1,3 +1,5 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 
 
@@ -25,7 +27,17 @@ class RmArguments(TaskArguments):
     async def parse_arguments(self):
         if len(self.command_line) == 0:
             raise Exception("rm requires a path.")
-        parts = self.command_line.strip().split(maxsplit=1)
+        # Handle file browser UI tasking: {"host":..., "path":..., "file":..., "full_path":...}
+        cl = self.command_line.strip()
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+                if "host" in data and data.get("full_path"):
+                    self.set_arg("path", data["full_path"])
+                    return
+            except Exception:
+                pass
+        parts = cl.split(maxsplit=1)
         self.set_arg("path", parts[0])
         if len(parts) > 1 and parts[1].lower() in ("-r", "-rf", "/s"):
             self.set_arg("recursive", True)
