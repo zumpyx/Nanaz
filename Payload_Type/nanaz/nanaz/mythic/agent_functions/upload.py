@@ -14,42 +14,30 @@ class UploadArguments(TaskArguments):
                 name="path",
                 type=ParameterType.String,
                 default_value="",
-                parameter_group_info=[
-                    ParameterGroupInfo(
-                        ui_position=0,
-                        required=True,
-                    )
-                ],
+                parameter_group_info=[ParameterGroupInfo(ui_position=0, required=True)],
             ),
             CommandParameter(
                 name="file",
                 type=ParameterType.File,
-                parameter_group_info=[
-                    ParameterGroupInfo(
-                        ui_position=1,
-                        required=True,
-                    )
-                ],
+                parameter_group_info=[ParameterGroupInfo(ui_position=1, required=True)],
             ),
             CommandParameter(
                 name="host",
                 type=ParameterType.String,
                 default_value="",
-                parameter_group_info=[
-                    ParameterGroupInfo(
-                        ui_position=2,
-                        required=False,
-                    )
-                ],
+                parameter_group_info=[ParameterGroupInfo(ui_position=2, required=False)],
             ),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
+        """File browser may send {host, path, file, full_path}. Use full_path as dest."""
+        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
+            self.set_arg("path", dictionary_arguments["full_path"])
+        else:
+            self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
         cl = self.command_line.strip()
-        # Handle file browser UI tasking context
         if cl.startswith("{"):
             try:
                 data = json.loads(cl)
@@ -67,7 +55,7 @@ class UploadCommand(CommandBase):
     cmd = "upload"
     needs_admin = False
     help_cmd = "upload [destination_path]"
-    description = "Upload a file to the target. File is base64-encoded in task parameters."
+    description = "Upload a file to the target. File content is embedded as base64."
     version = 1
     author = "@zumpyx"
     argument_class = UploadArguments
@@ -81,31 +69,24 @@ class UploadCommand(CommandBase):
         supported_ui_features=["file_browser:upload"],
     )
 
-    async def create_go_tasking(
-        self, taskData: PTTaskMessageAllData
-    ) -> PTTaskCreateTaskingMessageResponse:
-        response = PTTaskCreateTaskingMessageResponse(
-            TaskID=taskData.Task.ID,
-            Success=True,
-        )
+    async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
+        response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
 
         file_uuid = taskData.args.get_arg("file")
         dest_path = taskData.args.get_arg("path")
 
-        # Fetch file contents from Mythic and embed as base64
         try:
             file_resp = await SendMythicRPCFileGetContent(
                 MythicRPCFileGetContentMessage(AgentFileID=file_uuid)
             )
             if file_resp.Success and file_resp.Content is not None:
-                file_bytes = file_resp.Content
-                encoded = base64.b64encode(file_bytes).decode("utf-8")
+                encoded = base64.b64encode(file_resp.Content).decode("utf-8")
                 taskData.args.add_arg("file_bytes", encoded)
                 taskData.args.remove_arg("file")
-                response.DisplayParams = f"{dest_path} ({len(file_bytes)} bytes)"
+                response.DisplayParams = f"{dest_path} ({len(file_resp.Content)} bytes)"
             else:
                 response.Success = False
-                response.Error = file_resp.Error or "Failed to fetch file content from Mythic"
+                response.Error = file_resp.Error or "Failed to fetch file content"
                 return response
         except Exception as e:
             response.Success = False
@@ -114,8 +95,5 @@ class UploadCommand(CommandBase):
 
         return response
 
-    async def process_response(
-        self, task: PTTaskMessageAllData, response: any
-    ) -> PTTaskProcessResponseMessageResponse:
-        resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
-        return resp
+    async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
+        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)

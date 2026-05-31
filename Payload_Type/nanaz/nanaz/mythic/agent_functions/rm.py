@@ -22,13 +22,17 @@ class RmArguments(TaskArguments):
         ]
 
     async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
+        """File browser sends {host, path, file, full_path}. Use full_path."""
+        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
+            self.set_arg("path", dictionary_arguments["full_path"])
+        else:
+            self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
-        if len(self.command_line) == 0:
-            raise Exception("rm requires a path.")
-        # Handle file browser UI tasking: {"host":..., "path":..., "file":..., "full_path":...}
         cl = self.command_line.strip()
+        if len(cl) == 0:
+            raise Exception("rm requires a path.")
+        # Handle file browser UI JSON
         if cl.startswith("{"):
             try:
                 data = json.loads(cl)
@@ -47,7 +51,7 @@ class RmCommand(CommandBase):
     cmd = "rm"
     needs_admin = False
     help_cmd = "rm [path] [-r]"
-    description = "Remove a file (or directory with -r). Cross-platform."
+    description = "Remove a file or directory (-r). Cross-platform."
     version = 1
     author = "@zumpyx"
     argument_class = RmArguments
