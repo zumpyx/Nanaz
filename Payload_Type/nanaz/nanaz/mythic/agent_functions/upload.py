@@ -95,7 +95,7 @@ class UploadCommand(CommandBase):
         # Fetch file contents from Mythic and embed as base64
         try:
             file_resp = await SendMythicRPCFileGetContent(
-                AgentFileUUID=file_uuid
+                MythicRPCFileGetContentMessage(AgentFileID=file_uuid)
             )
             if file_resp.Success and file_resp.Content is not None:
                 file_bytes = file_resp.Content
