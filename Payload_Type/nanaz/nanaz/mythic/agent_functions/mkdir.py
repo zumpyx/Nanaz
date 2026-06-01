@@ -1,20 +1,16 @@
 from mythic_container.MythicCommandBase import *
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class MkdirArguments(TaskArguments):
+
+class MkdirArguments(FileBrowserArguments):
+    command_name = "mkdir"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
         ]
-
-    async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
-
-    async def parse_arguments(self):
-        if len(self.command_line) == 0:
-            raise Exception("mkdir requires a directory path.")
-        self.set_arg("path", self.command_line.strip())
 
 
 class MkdirCommand(CommandBase):
@@ -26,13 +22,7 @@ class MkdirCommand(CommandBase):
     author = "@zumpyx"
     argument_class = MkdirArguments
     attackmapping = ["T1105"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)

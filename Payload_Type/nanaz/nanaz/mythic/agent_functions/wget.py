@@ -1,7 +1,12 @@
 from mythic_container.MythicCommandBase import *
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class WgetArguments(TaskArguments):
+
+class WgetArguments(FileBrowserArguments):
+    cli_takes_path = False  # wget takes (url, [path]) — handled below
+    command_name = "wget"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
@@ -17,13 +22,11 @@ class WgetArguments(TaskArguments):
             ),
         ]
 
-    async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
-
     async def parse_arguments(self):
-        if len(self.command_line) == 0:
-            raise Exception("wget requires a URL.")
-        parts = self.command_line.strip().split(maxsplit=1)
+        cl = self.command_line.strip()
+        if not cl:
+            return
+        parts = cl.split(maxsplit=1)
         self.set_arg("url", parts[0])
         if len(parts) > 1:
             self.set_arg("path", parts[1])
@@ -38,13 +41,7 @@ class WgetCommand(CommandBase):
     author = "@zumpyx"
     argument_class = WgetArguments
     attackmapping = ["T1105"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)

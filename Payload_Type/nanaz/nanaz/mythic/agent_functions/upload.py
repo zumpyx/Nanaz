@@ -1,11 +1,14 @@
 import base64
-import json
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class UploadArguments(TaskArguments):
+
+class UploadArguments(FileBrowserArguments):
+    command_name = "upload"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
@@ -13,30 +16,6 @@ class UploadArguments(TaskArguments):
             CommandParameter(name="file", type=ParameterType.File),
             CommandParameter(name="host", type=ParameterType.String, default_value=""),
         ]
-
-    async def parse_dictionary(self, dictionary_arguments):
-        """File browser may send {host, path, file, full_path}. Use full_path as dest."""
-        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
-            self.set_arg("path", dictionary_arguments["full_path"])
-        else:
-            self.load_args_from_dictionary(dictionary_arguments)
-
-    async def parse_arguments(self):
-        cl = self.command_line.strip()
-        if cl.startswith("{"):
-            try:
-                data = json.loads(cl)
-                if "host" in data and data.get("full_path"):
-                    self.set_arg("path", data["full_path"])
-                    return
-                elif "path" in data:
-                    self.set_arg("path", data["path"])
-                    return
-            except Exception:
-                pass
-        if len(cl) == 0:
-            raise Exception("upload requires a destination path.")
-        self.set_arg("path", cl)
 
 
 class UploadCommand(CommandBase):
@@ -49,13 +28,7 @@ class UploadCommand(CommandBase):
     argument_class = UploadArguments
     attackmapping = ["T1105", "T1036"]
     supported_ui_features = ["file_browser:upload"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)

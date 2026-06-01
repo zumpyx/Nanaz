@@ -1,7 +1,12 @@
 from mythic_container.MythicCommandBase import *
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class MvArguments(TaskArguments):
+
+class MvArguments(FileBrowserArguments):
+    cli_takes_path = False
+    command_name = "mv"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
@@ -9,13 +14,11 @@ class MvArguments(TaskArguments):
             CommandParameter(name="dst", type=ParameterType.String, default_value=""),
         ]
 
-    async def parse_dictionary(self, dictionary_arguments):
-        self.load_args_from_dictionary(dictionary_arguments)
-
     async def parse_arguments(self):
-        if len(self.command_line) == 0:
-            raise Exception("mv requires source and destination.")
-        parts = self.command_line.strip().split(maxsplit=1)
+        cl = self.command_line.strip()
+        if not cl:
+            return
+        parts = cl.split(maxsplit=1)
         if len(parts) < 2:
             raise Exception("mv requires source AND destination.")
         self.set_arg("src", parts[0])
@@ -31,13 +34,7 @@ class MvCommand(CommandBase):
     author = "@zumpyx"
     argument_class = MvArguments
     attackmapping = ["T1105"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
