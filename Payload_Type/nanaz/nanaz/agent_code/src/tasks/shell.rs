@@ -158,6 +158,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     .output();
             }
 
+            // Wait briefly for the reader thread to drain pipes and reap the
+            // zombie. If the kill command itself failed (e.g. perms), the
+            // thread will still hang on read_to_end; we don't block on it here.
+            let _ = rx.recv_timeout(Duration::from_secs(2));
+
             TaskResponse::failed(
                 task.id,
                 &format!(
