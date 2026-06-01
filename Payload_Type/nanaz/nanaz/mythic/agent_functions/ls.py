@@ -16,25 +16,16 @@ class LsArguments(TaskArguments):
                 name="path",
                 type=ParameterType.String,
                 default_value=".",
-                parameter_group_info=[
-                    ParameterGroupInfo(ui_position=0, required=True)
-                ],
             ),
             CommandParameter(
                 name="recursive",
                 type=ParameterType.Boolean,
                 default_value=False,
-                parameter_group_info=[
-                    ParameterGroupInfo(ui_position=1, required=False)
-                ],
             ),
             CommandParameter(
                 name="host",
                 type=ParameterType.String,
                 default_value="",
-                parameter_group_info=[
-                    ParameterGroupInfo(ui_position=2, required=False)
-                ],
             ),
         ]
 
@@ -63,10 +54,16 @@ class LsArguments(TaskArguments):
                     return
             except Exception:
                 pass
-        if len(cl) == 0:
-            self.set_arg("path", ".")
-            return
-        self.set_arg("path", cl)
+        # Parse CLI: ls, ls /path, ls -r, ls -r /path
+        path = "."
+        recursive = False
+        for part in cl.split():
+            if part in ("-r", "-R"):
+                recursive = True
+            else:
+                path = part
+        self.set_arg("path", path)
+        self.set_arg("recursive", recursive)
 
 
 class LsCommand(CommandBase):
