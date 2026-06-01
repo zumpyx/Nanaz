@@ -24,6 +24,7 @@ mod sys;
 mod tasks;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::cell::RefCell;
 
 const RAW_JSON: &str = include_str!("../config.json");
 
@@ -35,6 +36,23 @@ pub static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 pub static EXIT_PROCESS: AtomicBool = AtomicBool::new(false);
 pub static KILLDATE: AtomicU64 = AtomicU64::new(0);
 pub static DEBUG: AtomicBool = AtomicBool::new(false);
+
+/// Thread-local buffer for handlers that need to emit multiple
+/// `TaskResponse`s (e.g. multi-chunk `download`). The agent loop drains this
+/// after each `safe_dispatch` and appends to `pending` before the next round.
+thread_local! {
+    pub static EXTRA_RESPONSES: RefCell<Vec<mythic::TaskResponse>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Append a response to the thread-local extras buffer.
+pub fn push_extra(resp: mythic::TaskResponse) {
+    EXTRA_RESPONSES.with(|cell| cell.borrow_mut().push(resp));
+}
+
+/// Drain the extras buffer, returning accumulated responses.
+pub fn take_extra() -> Vec<mythic::TaskResponse> {
+    EXTRA_RESPONSES.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+}
 
 pub fn set_sleep(interval: u64, jitter: Option<u64>) {
     INTERVAL.store(interval, Ordering::Release);

