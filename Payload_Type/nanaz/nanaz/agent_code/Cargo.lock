@@ -549,6 +549,7 @@ dependencies = [
  "base64",
  "chrono",
  "encoding_rs",
+ "libc",
  "mythic-c2",
  "rand",
  "rustls",

@@ -62,7 +62,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // 3. Write file
     match std::fs::write(path, &data) {
         Ok(_) => {
-            println!("[upload] wrote {} bytes to {}", data.len(), path.display());
+            info!("[upload] wrote {} bytes to {}", data.len(), path.display());
             TaskResponse {
                 task_id: task.id,
                 completed: Some(true),

@@ -71,7 +71,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // 4. Build download response
     let full_path = path.to_string_lossy().to_string();
 
-    println!(
+    info!(
         "[download] {} → {} bytes (base64: {})",
         full_path,
         data.len(),

