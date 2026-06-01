@@ -27,14 +27,26 @@ RUN python -m pip install cryptography
 WORKDIR /Mythic/
 COPY [".", "."]
 
-# Only musl target is required (Windows builds via cargo-zigbuild link with
-# the zig toolchain, not the rustup target).
+# Build every (target, profile) combination so Mythic can hand out the right
+# binary regardless of what the operator picks. Zigbuild links with the zig
+# toolchain for both targets — no separate GNU/mingw toolchain needed.
+#
+#   target                                 debug   release
+#   x86_64-unknown-linux-musl   (Linux)    [built]  [built]
+#   x86_64-pc-windows-gnu       (Windows)  [built]  [built]
 RUN cd nanaz/agent_code && \
     . "$CARGO_HOME/env" && \
-    rustup target add x86_64-unknown-linux-musl && \
     cargo install cargo-zigbuild --version ${CARGO_ZIGBUILD_VERSION} --locked && \
     cargo fetch && \
-    cargo build && \
-    cargo build -r
+    # Provide a placeholder config.json so the embedded JSON loader doesn't
+    # fall back to all-zeros. The Mythic builder overwrites this with the
+    # real PSK + UUID at payload-build time.
+    cp -n config.example.json config.json || true && \
+    for target in x86_64-unknown-linux-musl x86_64-pc-windows-gnu; do \
+        for profile in "" --release; do \
+            echo ">>> cargo zigbuild --target $target $profile"; \
+            cargo zigbuild --target "$target" $profile; \
+        done; \
+    done
 
 CMD ["python3", "main.py"]
