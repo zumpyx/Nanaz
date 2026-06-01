@@ -58,6 +58,7 @@ fn url_encode(s: &str) -> String {
 /// contains the AES-encrypted payload, which is deterministic per (PSK, IV)
 /// pair — printing it in full would let observers correlate beacons without
 /// holding the PSK.
+#[cfg(debug_assertions)]
 fn redact_url(url: &str) -> String {
     if let Some(q) = url.find('?') {
         let path = &url[..q];
