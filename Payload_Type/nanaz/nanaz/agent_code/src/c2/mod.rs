@@ -1,8 +1,17 @@
 use crate::Result;
+use crate::config::ConfigError;
+use base64::Engine;
 use mythic::C2Transport;
 use serde::{Deserialize, Serialize};
 
 pub mod http;
+
+/// AES-256 needs a 32-byte key. Mythic serialises that as a base64 string;
+/// we accept either the raw 32-byte form (no padding) or the 44-byte
+/// standard base64 form. We surface a clean `ConfigError::InvalidPsk`
+/// rather than letting the AES layer fail with a confusing "cipher"
+/// error deep in the stack.
+const AES_KEY_LEN: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum C2Profile {
@@ -41,6 +50,36 @@ impl C2Profile {
         match self {
             C2Profile::Http(p) => p.external_ip_check(),
         }
+    }
+
+    /// Verify the AES PSK, if present, is a parseable base64 string that
+    /// decodes to a 32-byte key. `None` is treated as "use Mythic's
+    /// profile default" and skipped.
+    pub fn validate_psk(&self) -> core::result::Result<(), ConfigError> {
+        let psk = match self {
+            C2Profile::Http(p) => p.aes_psk.as_ref(),
+        };
+        let Some(psk) = psk else { return Ok(()) };
+
+        if psk.is_empty() {
+            return Err(ConfigError::InvalidPsk {
+                reason: "aes_psk is empty".into(),
+            });
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(psk.trim())
+            .map_err(|e| ConfigError::InvalidPsk {
+                reason: format!("aes_psk is not valid base64: {e}"),
+            })?;
+        if decoded.len() != AES_KEY_LEN {
+            return Err(ConfigError::InvalidPsk {
+                reason: format!(
+                    "aes_psk decodes to {} bytes, expected {AES_KEY_LEN}",
+                    decoded.len()
+                ),
+            });
+        }
+        Ok(())
     }
 }
 

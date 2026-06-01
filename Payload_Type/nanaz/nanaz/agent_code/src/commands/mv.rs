@@ -1,15 +1,34 @@
 //! Move/rename a file — cross-platform via std::fs::rename.
 //! Falls back to copy + delete when crossing filesystem boundaries.
 
+use std::io;
 use std::path::Path;
 
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::common::pathguard::is_protected_path;
+
+/// Platform-specific error code meaning "source and destination are on
+/// different filesystems; rename is impossible, copy + delete required".
+/// Linux/macOS: EXDEV (BSD/Linux both happen to be 18).
+/// Windows:    ERROR_NOT_SAME_DEVICE.
+#[cfg(unix)]
+const CROSS_DEVICE: i32 = 18; // EXDEV
+#[cfg(windows)]
+const CROSS_DEVICE: i32 = 17; // ERROR_NOT_SAME_DEVICE
+
+fn is_cross_device(e: &io::Error) -> bool {
+    e.raw_os_error() == Some(CROSS_DEVICE)
+}
+
 #[derive(Deserialize)]
 struct Params {
     src: String,
     dst: String,
+    /// When true, allow writing to system paths (default false).
+    #[serde(default)]
+    allow_system_path: bool,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -17,6 +36,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Ok(p) => p,
         Err(e) => return TaskResponse::failed(task.id, &format!("mv parse error: {e}")),
     };
+
+    if !params.allow_system_path && is_protected_path(&params.dst) {
+        return TaskResponse::failed(
+            task.id,
+            &format!(
+                "refusing to write to system path {}; set allow_system_path=true to override",
+                params.dst
+            ),
+        );
+    }
 
     let src = Path::new(&params.src);
     let dst = Path::new(&params.dst);
@@ -36,7 +65,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: Some(format!("moved {} → {}", src.display(), dst.display())),
             ..Default::default()
         },
-        Err(e) if e.raw_os_error() == Some(18) /* EXDEV: cross-device link */ => {
+        Err(e) if is_cross_device(&e) => {
             // Filesystem boundary — fall back to copy + delete
             match std::fs::copy(src, dst) {
                 Ok(n) => match std::fs::remove_file(src) {

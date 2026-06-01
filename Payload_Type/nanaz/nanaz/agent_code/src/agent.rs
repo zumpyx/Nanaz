@@ -230,8 +230,12 @@ pub fn run(config: Config) -> MythicResult<()> {
         sleep_with_jitter();
         let c2 = profiles.choose(&mut rng).unwrap();
 
-        let batch: Vec<_> = pending.drain(..).collect();
-        match get_tasking_with(&mythic, 5, c2, batch.clone()) {
+        // Move pending into the request. The Err branch needs the
+        // responses back, so clone first; the Ok branch can keep them
+        // and avoid the second allocation by moving into the call.
+        let batch = std::mem::take(&mut pending);
+        let cloned_for_retry = batch.clone();
+        match get_tasking_with(&mythic, 5, c2, batch) {
             Ok(tasking) => {
                 if DEBUG.load(Ordering::Relaxed) {
                     info!("task: {:?}", tasking);
@@ -251,7 +255,11 @@ pub fn run(config: Config) -> MythicResult<()> {
                 if DEBUG.load(Ordering::Relaxed) {
                     eprintln!("[!] get_tasking failed: {e}");
                 }
-                pending.extend(batch);
+                // Re-queue everything we tried to send so the next round
+                // re-attempts. Note: this can grow pending on a sustained
+                // outage — operators should expect the agent to back off
+                // gracefully via the 5s sleep below.
+                pending.extend(cloned_for_retry);
                 sleep(Duration::from_secs(5));
             }
         }

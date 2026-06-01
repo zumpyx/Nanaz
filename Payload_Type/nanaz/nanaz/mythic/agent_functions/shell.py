@@ -83,5 +83,5 @@ class ShellCommand(CommandBase):
     async def process_response(
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
-        resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
-        return resp
+        from ._base import error_aware_process_response
+        return error_aware_process_response(task, response)

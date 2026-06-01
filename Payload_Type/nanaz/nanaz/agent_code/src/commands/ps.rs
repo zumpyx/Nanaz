@@ -27,11 +27,29 @@ struct Params {
     host: Option<String>,
 }
 
+/// Linux `USER_HZ` — the kernel's clock-tick rate. Defaults to 100, but
+/// Docker-on-Mac hosts, some embedded kernels, and tickless configs use
+/// 250/300/1000. We read `_SC_CLK_TCK` at runtime so cross-architecture
+/// or non-standard host kernels don't produce wildly wrong `start_time`
+/// values (which Mythic then shows in the process browser).
+#[cfg(target_os = "linux")]
+fn clock_ticks_per_second() -> u64 {
+    // SAFETY: sysconf is thread-safe and the result is a long.
+    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if ticks > 0 {
+        ticks as u64
+    } else {
+        // Fall back to the historical Linux default.
+        100
+    }
+}
+
 // ── Linux: parse /proc ──────────────────────────────────────
 
 #[cfg(target_os = "linux")]
 fn list_processes() -> Result<Vec<ProcessEntry>, String> {
     let mut procs: Vec<ProcessEntry> = Vec::new();
+    let hz = clock_ticks_per_second();
 
     let dir = std::fs::read_dir("/proc").map_err(|e| format!("read /proc: {e}"))?;
 
@@ -60,11 +78,13 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
         let fields: Vec<&str> = rest.split_whitespace().collect();
 
         let ppid: Option<i64> = fields.first().and_then(|s| s.parse().ok());
-        // starttime is at field index 19 (0-based after comm+state removal: state is field 0, then ppid=1, ..., starttime=19)
+        // starttime is at field index 19 (0-based after comm+state removal:
+        // state is field 0, then ppid=1, ..., starttime=19). The value is
+        // in `_SC_CLK_TCK` units; convert to milliseconds using the live
+        // tick rate.
         let start_time: Option<i64> = fields.get(19).and_then(|s| {
             let ticks: u64 = s.parse().ok()?;
-            // Convert clock ticks (usually 100 Hz) to milliseconds
-            Some((ticks * 1000 / 100) as i64)
+            Some((ticks * 1000 / hz) as i64)
         });
 
         // Read /proc/<pid>/cmdline for command line
@@ -250,12 +270,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 // host left empty → Mythic fills from callback info
             }
 
-            let count = procs.len();
+            // The `user_output` is intentionally None — the Python
+            // `PsCommand.process_response` formats the structured process
+            // list and writes it via `MythicRPCTaskUpdate`. Writing a
+            // duplicate `{count} processes` summary here would show up as
+            // a second, less-informative output block in the UI.
             TaskResponse {
                 task_id: task.id,
                 completed: Some(true),
                 status: Some("completed".into()),
-                user_output: Some(format!("{count} processes")),
+                user_output: None,
                 processes: procs,
                 ..Default::default()
             }

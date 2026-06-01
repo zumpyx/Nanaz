@@ -2,7 +2,7 @@ import json
 
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, simple_command_attributes
+from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
 
 
 class RmArguments(FileBrowserArguments):
@@ -47,4 +47,4 @@ class RmCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        return error_aware_process_response(task, response)

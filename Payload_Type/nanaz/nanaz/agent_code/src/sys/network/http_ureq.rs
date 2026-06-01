@@ -172,3 +172,62 @@ pub fn http_request(
         _ => Err(Error::Transport("unsupported HTTP method".into())),
     }
 }
+
+/// Stream a GET response body into a writer, refusing to read past `max_bytes`.
+///
+/// Used by `wget` so the agent does not have to hold the entire body in
+/// memory before writing to disk, and so a runaway server cannot OOM the
+/// implant.
+#[allow(clippy::too_many_arguments)]
+pub fn http_get_to_writer<W: std::io::Write>(
+    url: &str,
+    headers: Option<&HashMap<String, String>>,
+    proxy: Option<&str>,
+    insecure_skip_tls_verify: bool,
+    max_bytes: u64,
+    writer: &mut W,
+) -> Result<u64> {
+    let agent = get_agent(proxy, insecure_skip_tls_verify)?;
+    let mut req = agent.get(url);
+    if let Some(h) = headers {
+        for (k, v) in h {
+            req = req.set(k, v);
+        }
+    }
+    let response = req
+        .call()
+        .map_err(|e| Error::Transport(format!("GET failed: {}", e)))?;
+
+    // Pre-flight: if the server advertised a Content-Length larger than the
+    // cap, fail closed before reading a single byte. We still respect the cap
+    // during streaming for chunked / unknown-length responses.
+    if let Some(len) = response.header("Content-Length") {
+        if let Ok(n) = len.parse::<u64>() {
+            if n > max_bytes {
+                return Err(Error::Transport(format!(
+                    "Content-Length {n} exceeds cap {max_bytes}"
+                )));
+            }
+        }
+    }
+
+    let mut reader = response.into_reader();
+    let mut buf = [0u8; 16 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let n = std::io::Read::read(&mut reader, &mut buf)
+            .map_err(|e| Error::Transport(format!("read body failed: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > max_bytes {
+            return Err(Error::Transport(format!(
+                "body exceeds cap {max_bytes} (read at least {total} bytes)"
+            )));
+        }
+        std::io::Write::write_all(writer, &buf[..n])
+            .map_err(|e| Error::Transport(format!("write failed: {e}")))?;
+    }
+    Ok(total)
+}

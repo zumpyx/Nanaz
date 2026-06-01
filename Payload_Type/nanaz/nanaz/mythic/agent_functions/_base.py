@@ -16,6 +16,8 @@ from mythic_container.MythicCommandBase import (
     CommandAttributes,
     CommandParameter,
     ParameterType,
+    PTTaskMessageAllData,
+    PTTaskProcessResponseMessageResponse,
     SupportedOS,
     TaskArguments,
 )
@@ -79,3 +81,26 @@ def simple_command_attributes(supported_os=None, builtin: bool = False) -> Comma
         load_only=False,
         suggested_command=False,
     )
+
+
+def error_aware_process_response(
+    task: PTTaskMessageAllData,
+    response: Any,
+) -> PTTaskProcessResponseMessageResponse:
+    """Default process_response that surfaces Rust-side errors.
+
+    Without this, every command's process_response returned
+    `PTTaskProcessResponseMessageResponse(Success=True)` regardless of
+    whether the Rust agent reported `status: "error"`. The Mythic UI would
+    mark such tasks as successful even when the operator saw an error string
+    in stdout. This helper inspects the response payload and propagates
+    the error so the UI marks the task as failed.
+    """
+    resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+    if isinstance(response, dict):
+        status = response.get("status")
+        if status == "error":
+            resp.Success = False
+            user_output = response.get("user_output") or "agent reported an error"
+            resp.Error = user_output
+    return resp

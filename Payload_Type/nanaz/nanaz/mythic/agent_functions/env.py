@@ -41,4 +41,5 @@ class EnvCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        from ._base import error_aware_process_response
+        return error_aware_process_response(task, response)

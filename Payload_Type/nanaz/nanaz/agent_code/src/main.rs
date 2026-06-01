@@ -111,8 +111,56 @@ fn main() {
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
 
-    let config = config::Config::load_json(RAW_JSON);
+    let config = match config::Config::load_json(RAW_JSON) {
+        Ok(c) => c,
+        Err(e) => {
+            // In daemonised mode, stderr points at /dev/null, so this
+            // message is invisible. Drop a breadcrumb at a fixed path so
+            // operators can `cat` it for post-mortem.
+            report_fatal(&format!("[nanaz] refusing to start: {e}"));
+            std::process::exit(2);
+        }
+    };
     if let Err(e) = agent::run(config) {
-        eprintln!("Agent error: {:?}", e);
+        report_fatal(&format!("[nanaz] agent loop exited: {e:?}"));
+    }
+}
+
+/// Best-effort fatal-error sink.
+///
+/// In debug builds the message is also written to stderr (which is still
+/// attached to the launching terminal). In release builds (where the agent
+/// has been daemonised and stderr is /dev/null) the message is written to
+/// a per-PID file under `/tmp` so an operator can recover it later.
+///
+/// Windows release builds set `windows_subsystem = "windows"` and so have
+/// no console attached at all — the file path is the only trace.
+fn report_fatal(msg: &str) {
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("{msg}");
+    }
+
+    #[cfg(unix)]
+    {
+        let pid = std::process::id();
+        // /tmp is the conventional Unix scratch dir; PIDs recycle so we
+        // truncate with O_TRUNC to overwrite any previous fatal for the
+        // same PID.
+        let path = format!("/tmp/nanaz-{pid}.fatal\0");
+        let bytes = msg.as_bytes();
+        unsafe {
+            let fd = libc::open(
+                path.as_ptr() as *const _,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                0o600,
+            );
+            if fd >= 0 {
+                libc::write(fd, bytes.as_ptr() as *const _, bytes.len());
+                // Also append a trailing newline so the file is line-buffered.
+                libc::write(fd, b"\n".as_ptr() as *const _, 1);
+                libc::close(fd);
+            }
+        }
     }
 }

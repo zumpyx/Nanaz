@@ -5,10 +5,15 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::common::pathguard::is_protected_path;
+
 #[derive(Deserialize)]
 struct Params {
     src: String,
     dst: String,
+    /// When true, allow writing to system paths (default false).
+    #[serde(default)]
+    allow_system_path: bool,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -16,6 +21,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Ok(p) => p,
         Err(e) => return TaskResponse::failed(task.id, &format!("cp parse error: {e}")),
     };
+
+    if !params.allow_system_path && is_protected_path(&params.dst) {
+        return TaskResponse::failed(
+            task.id,
+            &format!(
+                "refusing to write to system path {}; set allow_system_path=true to override",
+                params.dst
+            ),
+        );
+    }
 
     let src = Path::new(&params.src);
     let dst = Path::new(&params.dst);

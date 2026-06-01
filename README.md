@@ -133,10 +133,10 @@ This agent speaks Mythic's `http` C2 profile. The container's
 | `ls` | `[path] [-r]` | File browser. `~` expansion, recursive mode, dirs first sort. |
 | `mkdir` | `path` | `mkdir -p` semantics. |
 | `mv` | `src dst` | Renames; falls back to copy+delete on `EXDEV` (cross-filesystem). |
-| `netstat` | — | TCP/UDP connection table. Linux: `/proc/net/tcp{,6}` + `udp{,6}`. macOS: `netstat -an -W -p tcp`. Windows: `netstat -ano`. |
+| `netstat` | — | TCP/UDP connection table. Linux: `/proc/net/tcp{,6}` + `udp{,6}`. macOS: `netstat -an -W -p tcp,udp`. Windows: `netstat -ano`. |
 | `ps` | — | Process listing. Linux: `/proc` walk. macOS: `ps`. Windows: `wmic` (with `tasklist` fallback). |
 | `resolve` | `hostname` | DNS resolve. `std::net::ToSocketAddrs`. |
-| `rm` | `path [-r]` | File browser. `recursive=true` for directories. |
+| `rm` | `path [-r]` | File browser. `recursive=true` for directories; `recursive` requires `confirm_destructive=true` to prevent typos. System paths require `allow_system_path=true`. |
 | `shell` | `command [shell] [timeout]` | Run via `cmd` / `powershell` / `bash` / `sh`. Default timeout 60s. |
 | `sleep` | `interval [jitter]` | Change polling cadence at runtime. |
 | `sysinfo` | — | OS, kernel, CPU, memory, uptime. |

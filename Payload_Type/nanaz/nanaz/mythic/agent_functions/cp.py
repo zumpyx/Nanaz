@@ -1,6 +1,6 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, simple_command_attributes
+from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
 
 
 class CpArguments(FileBrowserArguments):
@@ -18,7 +18,13 @@ class CpArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        parts = cl.split(maxsplit=1)
+        # shlex handles quoted paths so operators can type
+        # cp "/path with space/a.txt" "/path with space/b.txt" from the CLI.
+        import shlex
+        try:
+            parts = shlex.split(cl)
+        except ValueError as e:
+            raise Exception(f"cp: failed to parse command line: {e}")
         if len(parts) < 2:
             raise Exception("cp requires source AND destination paths.")
         self.set_arg("src", parts[0])
@@ -42,4 +48,4 @@ class CpCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        return error_aware_process_response(task, response)

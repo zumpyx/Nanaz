@@ -26,7 +26,13 @@ class WgetArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        parts = cl.split(maxsplit=1)
+        # shlex so operators can quote either the URL (rare) or the
+        # destination path (common — operators often type "/tmp/My Drop/x").
+        import shlex
+        try:
+            parts = shlex.split(cl)
+        except ValueError as e:
+            raise Exception(f"wget: failed to parse command line: {e}")
         self.set_arg("url", parts[0])
         if len(parts) > 1:
             self.set_arg("path", parts[1])
@@ -51,4 +57,5 @@ class WgetCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        from ._base import error_aware_process_response
+        return error_aware_process_response(task, response)

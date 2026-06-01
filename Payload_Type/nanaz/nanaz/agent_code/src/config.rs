@@ -8,26 +8,61 @@ pub struct Config {
     pub c2_profiles: Vec<C2Profile>,
 }
 
-impl Config {
-    /// Parse embedded config JSON. Falls back to an all-zeros UUID and empty
-    /// profile list on parse failure so the binary still starts (and surfaces a
-    /// clean error via the C2 layer) rather than panicking before main.
-    pub fn load_json(config: &str) -> Self {
-        match serde_json::from_str(config) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("[config] embedded config.json invalid: {e}");
-                Self {
-                    payload_uuid: uuid::Uuid::nil(),
-                    c2_profiles: Vec::new(),
-                }
+#[derive(Debug)]
+pub enum ConfigError {
+    Parse(String),
+    Empty {
+        reason: &'static str,
+    },
+    InvalidPsk {
+        reason: String,
+    },
+}
+
+impl core::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ConfigError::Parse(e) => write!(f, "embedded config.json invalid: {e}"),
+            ConfigError::Empty { reason } => write!(f, "embedded config.json unusable: {reason}"),
+            ConfigError::InvalidPsk { reason } => {
+                write!(f, "embedded config.json has invalid PSK: {reason}")
             }
         }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl Config {
+    /// Parse embedded config JSON. Returns an error rather than silently
+    /// substituting a nil UUID / empty profile list — a malformed config would
+    /// otherwise let the binary "start" and immediately exit, which is
+    /// impossible to distinguish from a successful no-op tasking.
+    pub fn load_json(config: &str) -> Result<Self, ConfigError> {
+        let parsed: Self =
+            serde_json::from_str(config).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        if parsed.payload_uuid.is_nil() {
+            return Err(ConfigError::Empty { reason: "payload_uuid is nil" });
+        }
+        if parsed.c2_profiles.is_empty() {
+            return Err(ConfigError::Empty { reason: "no c2_profiles configured" });
+        }
+        // PSK validation. Mythic generates a 32-byte base64 AES key per
+        // payload; rejecting malformed keys at load time means a typo
+        // surfaces as "refusing to start" instead of a confusing AES error
+        // deep in the C2 layer.
+        for profile in &parsed.c2_profiles {
+            profile.validate_psk()?;
+        }
+        Ok(parsed)
     }
 }
 
 #[test]
 fn test_load_config() {
     const RAW_JSON: &str = include_str!("../config.json");
+    // A nil-UUID, empty-profile, or redacted-PSK config (the placeholder)
+    // will fail the validation checks; we only assert the function does
+    // not panic on the whatever-the-developer-has-checked-in JSON.
     let _ = Config::load_json(RAW_JSON);
 }

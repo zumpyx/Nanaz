@@ -1,6 +1,6 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, simple_command_attributes
+from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
 
 
 class MvArguments(FileBrowserArguments):
@@ -18,7 +18,12 @@ class MvArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        parts = cl.split(maxsplit=1)
+        # shlex so operators can quote paths containing whitespace.
+        import shlex
+        try:
+            parts = shlex.split(cl)
+        except ValueError as e:
+            raise Exception(f"mv: failed to parse command line: {e}")
         if len(parts) < 2:
             raise Exception("mv requires source AND destination.")
         self.set_arg("src", parts[0])
@@ -42,4 +47,4 @@ class MvCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        return error_aware_process_response(task, response)
