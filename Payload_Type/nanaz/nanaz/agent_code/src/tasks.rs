@@ -20,10 +20,6 @@ mod netstat;
 mod ps;
 #[path = "tasks/rm.rs"]
 mod rm;
-#[path = "tasks/run_bof.rs"]
-mod run_bof;
-#[path = "tasks/run_dll.rs"]
-pub mod run_dll;
 #[path = "tasks/shell.rs"]
 mod shell;
 #[path = "tasks/sleep.rs"]
@@ -51,8 +47,6 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "netstat" => netstat::handle(task),
         "ps" => ps::handle(task),
         "rm" => rm::handle(task),
-        "run_bof" => run_bof::handle(task),
-        "run_dll" => run_dll::handle(task),
         "shell" => shell::handle(task),
         "sleep" => sleep::handle(task),
         "sysinfo" => sysinfo::handle(task),
