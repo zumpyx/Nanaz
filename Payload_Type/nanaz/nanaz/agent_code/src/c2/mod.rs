@@ -35,6 +35,13 @@ impl C2Profile {
             }
         }
     }
+
+    /// Whether this profile wants an external IP lookup at check-in.
+    pub fn external_ip_check(&self) -> bool {
+        match self {
+            C2Profile::Http(p) => p.external_ip_check(),
+        }
+    }
 }
 
 impl C2Transport for C2Profile {

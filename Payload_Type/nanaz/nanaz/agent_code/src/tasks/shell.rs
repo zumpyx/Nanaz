@@ -39,11 +39,54 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("shell parse error: {e}")),
     };
 
+    // OS validation: Windows shells require Windows, Unix shells require Unix.
+    // Without this, an operator running on a Windows host with shell=sh gets
+    // a confusing "binary not found" from `sh` instead of a clear error.
+    #[cfg(windows)]
+    {
+        match params.shell.as_str() {
+            "cmd" | "powershell" => {}
+            other => {
+                return TaskResponse::failed(
+                    task.id,
+                    &format!(
+                        "shell '{other}' is not available on Windows; use 'cmd' or 'powershell'"
+                    ),
+                );
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        match params.shell.as_str() {
+            "bash" | "sh" => {}
+            other => {
+                return TaskResponse::failed(
+                    task.id,
+                    &format!(
+                        "shell '{other}' is not available on this OS; use 'bash' or 'sh'"
+                    ),
+                );
+            }
+        }
+    }
+
     let (bin, flag) = match params.shell.as_str() {
         "cmd" => ("cmd", "/c"),
         "powershell" => ("powershell", "-Command"),
         "bash" => ("bash", "-c"),
-        "sh" | _ => ("sh", "-c"),
+        "sh" => ("sh", "-c"),
+        // Fallback to platform default
+        _ => (
+            #[cfg(windows)]
+            "cmd",
+            #[cfg(not(windows))]
+            "sh",
+            #[cfg(windows)]
+            "/c",
+            #[cfg(not(windows))]
+            "-c",
+        ),
     };
 
     // Spawn child with piped stdout/stderr

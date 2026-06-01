@@ -110,13 +110,27 @@ pub fn local_ips() -> Vec<String> {
     ips
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static EXTERNAL_IP_CHECK: AtomicBool = AtomicBool::new(false);
+
+/// Set by the C2 profile before agent start. When false, [`external_ip`]
+/// returns None without making any network call.
+pub fn set_external_ip_check(enabled: bool) {
+    EXTERNAL_IP_CHECK.store(enabled, Ordering::Release);
+}
+
 pub fn external_ip() -> Option<String> {
+    if !EXTERNAL_IP_CHECK.load(Ordering::Acquire) {
+        return None;
+    }
     crate::sys::network::http_request(
-        "http://icanhazip.com",
+        "https://api.ipify.org",
         "GET",
         None,
         None,
         None,
+        true,
     )
     .ok()
     .map(|s| s.trim().to_string())

@@ -3,12 +3,18 @@
 
 // ── Logging macros (MUST be before mod declarations) ────
 
-/// Print informational messages only in debug builds.
+/// Print informational messages only in debug builds and only when the
+/// DEBUG global is set. Also suppress if the agent has daemonised
+/// (no stderr to write to).
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
         #[cfg(debug_assertions)]
-        { println!($($arg)*); }
+        {
+            if $crate::DEBUG.load(::core::sync::atomic::Ordering::Relaxed) {
+                eprintln!($($arg)*);
+            }
+        }
     };
 }
 
@@ -69,6 +75,9 @@ pub fn set_killdate(ts: u64) {
 
 fn main() {
     // Linux release: fork to background so the agent doesn't occupy the shell.
+    // After fork: detach from controlling terminal (setsid), ignore SIGHUP,
+    // close std{in,out,err} and reopen against /dev/null, chdir to root.
+    // This ensures no parent fd leaks into the daemonised child.
     #[cfg(all(unix, not(debug_assertions)))]
     unsafe {
         if libc::fork() != 0 {
@@ -76,6 +85,24 @@ fn main() {
         }
         libc::setsid();
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
+
+        // Close stdin/stdout/stderr and reopen against /dev/null.
+        // Without this the daemonised agent would still hold fds pointing
+        // at the original launcher / terminal.
+        let devnull = b"/dev/null\0";
+        let fd = libc::open(devnull.as_ptr() as *const _, libc::O_RDWR);
+        if fd >= 0 {
+            // dup2 onto 0, 1, 2 (don't assume they were 0/1/2 — could be
+            // closed already or shifted)
+            libc::dup2(fd, 0);
+            libc::dup2(fd, 1);
+            libc::dup2(fd, 2);
+            if fd > 2 {
+                libc::close(fd);
+            }
+        }
+        // Detach from cwd of launcher to avoid keeping it busy.
+        let _ = libc::chdir(b"/\0".as_ptr() as *const _);
     }
 
     // Linux debug: still attached to terminal, but ignore SIGHUP.

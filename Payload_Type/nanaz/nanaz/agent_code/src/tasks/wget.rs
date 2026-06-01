@@ -28,7 +28,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // 1. Download
-    let body = match http_request(&params.url, "GET", None, None, None) {
+    let body = match http_request(&params.url, "GET", None, None, None, true) {
         Ok(b) => b,
         Err(e) => return TaskResponse::failed(task.id, &format!("download {} failed: {e}", params.url)),
     };
