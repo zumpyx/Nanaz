@@ -12,6 +12,12 @@ TARGETS = {
     "Linux": "x86_64-unknown-linux-musl",
 }
 
+# Resolve agent_code path from this file's location so the builder works
+# regardless of the container's CWD.
+AGENT_CODE_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent / "agent_code"
+)
+
 
 class Nanaz(PayloadType):
     name = "nanaz"
@@ -22,7 +28,10 @@ class Nanaz(PayloadType):
     semver = "0.1.0"
     wrapper = False
     wrapped_payloads = []
-    c2_profiles = ["http", "httpx"]
+    # httpx is intentionally NOT listed — only the http C2 profile is
+    # implemented in src/c2/. Adding it would surface unsupported options
+    # in the operator UI.
+    c2_profiles = ["http"]
     note = f"Cross-platform Rust agent. Version: {semver}."
     supports_dynamic_loading = True
     supports_multiple_c2_instances_in_build = True
@@ -37,14 +46,22 @@ class Nanaz(PayloadType):
         ),
     ]
 
-    agent_code_path = pathlib.Path(".") / "nanaz" / "agent_code"
+    agent_code_path = AGENT_CODE_PATH
 
     async def build(self) -> BuildResponse:
         resp = BuildResponse(status=BuildStatus.Error)
 
         try:
             debug = self.get_parameter("debug")
-            target_os = "Windows" if "windows" in str(getattr(self, "selected_os", "")).lower() else "Linux"
+            selected = str(getattr(self, "selected_os", "")).lower()
+            if "windows" in selected:
+                target_os = "Windows"
+            elif "linux" in selected:
+                target_os = "Linux"
+            else:
+                raise Exception(
+                    f"unsupported selected_os '{selected}'; only Windows and Linux are supported"
+                )
 
             # --- config.json ---
             c2_profiles = []
