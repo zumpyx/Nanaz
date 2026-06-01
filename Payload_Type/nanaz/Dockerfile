@@ -34,19 +34,38 @@ COPY [".", "."]
 #   target                                 debug   release
 #   x86_64-unknown-linux-musl   (Linux)    [built]  [built]
 #   x86_64-pc-windows-gnu       (Windows)  [built]  [built]
+#
+# We deliberately don't `set -e`: a single failing combination should not
+# abort the whole build (we want to see ALL failures in the log). The
+# final exit code reflects whether every (target, profile) succeeded.
 RUN cd nanaz/agent_code && \
     . "$CARGO_HOME/env" && \
+    set +e && \
     cargo install cargo-zigbuild --version ${CARGO_ZIGBUILD_VERSION} --locked && \
     cargo fetch && \
     # Provide a placeholder config.json so the embedded JSON loader doesn't
     # fall back to all-zeros. The Mythic builder overwrites this with the
     # real PSK + UUID at payload-build time.
     cp -n config.example.json config.json || true && \
+    failures=0 && \
     for target in x86_64-unknown-linux-musl x86_64-pc-windows-gnu; do \
         for profile in "" --release; do \
+            echo ""; \
+            echo "================================================================"; \
             echo ">>> cargo zigbuild --target $target $profile"; \
+            echo "================================================================"; \
             cargo zigbuild --target "$target" $profile; \
+            rc=$?; \
+            if [ "$rc" -ne 0 ]; then \
+                echo "!!! FAILED: cargo zigbuild --target $target $profile (exit $rc)"; \
+                failures=$((failures + 1)); \
+            fi; \
         done; \
-    done
+    done; \
+    echo ""; \
+    echo "================================================================"; \
+    echo "build summary: $failures failure(s)"; \
+    echo "================================================================"; \
+    exit $failures
 
 CMD ["python3", "main.py"]
