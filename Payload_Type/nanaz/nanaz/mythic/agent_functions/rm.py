@@ -2,8 +2,13 @@ import json
 
 from mythic_container.MythicCommandBase import *
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class RmArguments(TaskArguments):
+
+class RmArguments(FileBrowserArguments):
+    cli_takes_path = True
+    command_name = "rm"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
@@ -11,29 +16,11 @@ class RmArguments(TaskArguments):
             CommandParameter(name="recursive", type=ParameterType.Boolean, default_value=False),
         ]
 
-    async def parse_dictionary(self, dictionary_arguments):
-        """File browser sends {host, path, file, full_path}. Use full_path."""
-        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
-            self.set_arg("path", dictionary_arguments["full_path"])
-        else:
-            self.load_args_from_dictionary(dictionary_arguments)
-
     async def parse_arguments(self):
         cl = self.command_line.strip()
-        if len(cl) == 0:
-            raise Exception("rm requires a path.")
-        # Handle file browser UI JSON
-        if cl.startswith("{"):
-            try:
-                data = json.loads(cl)
-                if "host" in data and data.get("full_path"):
-                    self.set_arg("path", data["full_path"])
-                    return
-                elif "path" in data:
-                    self.set_arg("path", data["path"])
-                    return
-            except Exception:
-                pass
+        if not cl or cl.startswith("{"):
+            await super().parse_arguments()
+            return
         parts = cl.split(maxsplit=1)
         self.set_arg("path", parts[0])
         if len(parts) > 1 and parts[1].lower() in ("-r", "-rf", "/s"):
@@ -50,13 +37,7 @@ class RmCommand(CommandBase):
     argument_class = RmArguments
     attackmapping = ["T1070"]
     supported_ui_features = ["file_browser:remove"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)

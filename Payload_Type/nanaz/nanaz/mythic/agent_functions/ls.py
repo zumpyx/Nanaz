@@ -7,8 +7,13 @@ from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
     SendMythicRPCTaskUpdate,
 )
 
+from ._base import FileBrowserArguments, simple_command_attributes
 
-class LsArguments(TaskArguments):
+
+class LsArguments(FileBrowserArguments):
+    cli_takes_path = True
+    command_name = "ls"
+
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
@@ -29,32 +34,13 @@ class LsArguments(TaskArguments):
             ),
         ]
 
-    async def parse_dictionary(self, dictionary_arguments):
-        """File browser sends {host, path, file, full_path}. Use full_path as the listing target."""
-        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
-            self.set_arg("path", dictionary_arguments["full_path"])
-            if dictionary_arguments.get("host"):
-                self.set_arg("host", dictionary_arguments["host"])
-        else:
-            self.load_args_from_dictionary(dictionary_arguments)
-
     async def parse_arguments(self):
+        # Extend FileBrowserArguments.parse_arguments to also recognise
+        # the `ls -r` / `ls -r /path` CLI forms.
         cl = self.command_line.strip()
-        # Handle file browser UI JSON tasking
-        if cl.startswith("{"):
-            try:
-                data = json.loads(cl)
-                if "host" in data and data.get("full_path"):
-                    self.set_arg("path", data["full_path"])
-                    if data.get("host"):
-                        self.set_arg("host", data["host"])
-                    return
-                elif "path" in data:
-                    self.set_arg("path", data["path"])
-                    return
-            except Exception:
-                pass
-        # Parse CLI: ls, ls /path, ls -r, ls -r /path
+        if not cl or cl.startswith("{"):
+            await super().parse_arguments()
+            return
         path = "."
         recursive = False
         for part in cl.split():
@@ -76,13 +62,7 @@ class LsCommand(CommandBase):
     argument_class = LsArguments
     attackmapping = ["T1083", "T1105"]
     supported_ui_features = ["file_browser:list"]
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-    )
+    attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
@@ -93,7 +73,6 @@ class LsCommand(CommandBase):
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
         resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
-        # Format file_browser structured data into JSON output for the interact window
         if isinstance(response, dict):
             fb = response.get("file_browser")
             if fb and fb.get("files"):
