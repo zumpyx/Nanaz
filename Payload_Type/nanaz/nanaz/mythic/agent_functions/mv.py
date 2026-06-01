@@ -5,18 +5,8 @@ class MvArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
-            CommandParameter(
-                name="src",
-                type=ParameterType.String,
-                default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=0, required=True)],
-            ),
-            CommandParameter(
-                name="dst",
-                type=ParameterType.String,
-                default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=1, required=True)],
-            ),
+            CommandParameter(name="src", type=ParameterType.String, default_value=""),
+            CommandParameter(name="dst", type=ParameterType.String, default_value=""),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):

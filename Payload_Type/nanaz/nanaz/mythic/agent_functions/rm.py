@@ -7,18 +7,8 @@ class RmArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
-            CommandParameter(
-                name="path",
-                type=ParameterType.String,
-                default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=0, required=True)],
-            ),
-            CommandParameter(
-                name="recursive",
-                type=ParameterType.Boolean,
-                default_value=False,
-                parameter_group_info=[ParameterGroupInfo(ui_position=1, required=False)],
-            ),
+            CommandParameter(name="path", type=ParameterType.String, default_value=""),
+            CommandParameter(name="recursive", type=ParameterType.Boolean, default_value=False),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):

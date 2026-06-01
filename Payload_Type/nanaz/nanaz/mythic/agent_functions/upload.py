@@ -9,23 +9,9 @@ class UploadArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
         self.args = [
-            CommandParameter(
-                name="path",
-                type=ParameterType.String,
-                default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=0, required=True)],
-            ),
-            CommandParameter(
-                name="file",
-                type=ParameterType.File,
-                parameter_group_info=[ParameterGroupInfo(ui_position=1, required=True)],
-            ),
-            CommandParameter(
-                name="host",
-                type=ParameterType.String,
-                default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=2, required=False)],
-            ),
+            CommandParameter(name="path", type=ParameterType.String, default_value=""),
+            CommandParameter(name="file", type=ParameterType.File),
+            CommandParameter(name="host", type=ParameterType.String, default_value=""),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):

@@ -9,7 +9,6 @@ class CatArguments(TaskArguments):
                 name="path",
                 type=ParameterType.String,
                 default_value="",
-                parameter_group_info=[ParameterGroupInfo(ui_position=0, required=True)],
             ),
         ]
 
