@@ -38,7 +38,7 @@ ARG TARGETS="x86_64-unknown-linux-musl x86_64-pc-windows-gnu"
 ARG AGENT_PATH=nanaz/agent_code
 
 RUN cd ${AGENT_PATH} && \
-    cp -n config.example.json config.json && cargo fetch && \
+    cargo fetch && \
     for TARGET in ${TARGETS}; do \
         cargo zigbuild --release --target $TARGET && \
         cargo zigbuild --debug --target $TARGET; \
