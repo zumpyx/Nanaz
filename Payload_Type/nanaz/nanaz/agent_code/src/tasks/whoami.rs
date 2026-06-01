@@ -10,6 +10,7 @@ struct Params {
     host: Option<String>,
 }
 
+#[cfg(not(windows))]
 fn run_cmd(bin: &str, args: &[&str]) -> Option<String> {
     std::process::Command::new(bin)
         .args(args)
