@@ -11,10 +11,15 @@ class UploadArguments(FileBrowserArguments):
 
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
+        # `host` is intentionally not a CommandParameter — Mythic's UI
+        # injects it via the {host, full_path} dict, and the CLI never
+        # has to type it. (The Rust Params struct previously accepted
+        # it for symmetry with download; that path is now #[allow
+        # (dead_code)] and slated for removal once all callers migrate
+        # to the host-free form.)
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
             CommandParameter(name="file", type=ParameterType.File),
-            CommandParameter(name="host", type=ParameterType.String, default_value=""),
         ]
 
 

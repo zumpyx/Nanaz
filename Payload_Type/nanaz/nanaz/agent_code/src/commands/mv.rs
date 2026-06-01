@@ -1,5 +1,10 @@
 //! Move/rename a file — cross-platform via std::fs::rename.
 //! Falls back to copy + delete when crossing filesystem boundaries.
+//!
+//! Both src and dst are protected. Without the src guard, an
+//! attacker-controlled `mv /etc/passwd /tmp/exfil` would happily
+//! delete the system file even when `dst` is not protected. Both
+//! ends must opt in independently.
 
 use std::io;
 use std::path::Path;
@@ -29,6 +34,12 @@ struct Params {
     /// When true, allow writing to system paths (default false).
     #[serde(default)]
     allow_system_path: bool,
+    /// When true, allow deleting (renaming away from) system paths
+    /// (default false). Independent of `allow_system_path` so the
+    /// operator can rename a system file out (src-ok, dst-not-ok)
+    /// without opening the bidirectional back door.
+    #[serde(default)]
+    allow_source_system_path: bool,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -37,12 +48,24 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("mv parse error: {e}")),
     };
 
+    // Dst side — refuse to write into protected trees.
     if !params.allow_system_path && is_protected_path(&params.dst) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to write to system path {}; set allow_system_path=true to override",
                 params.dst
+            ),
+        );
+    }
+    // Src side — refuse to *delete* (rename away from) a protected
+    // path unless explicitly opted in.
+    if !params.allow_source_system_path && is_protected_path(&params.src) {
+        return TaskResponse::failed(
+            task.id,
+            &format!(
+                "refusing to remove from system path {}; set allow_source_system_path=true to override",
+                params.src
             ),
         );
     }

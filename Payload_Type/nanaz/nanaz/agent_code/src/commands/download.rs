@@ -15,10 +15,15 @@
 //! ```json
 //! {
 //!     "path": "/etc/passwd",
-//!     "host": "optional-hostname",
 //!     "chunk_size": 524288   // optional, bytes (default 512 KiB)
 //! }
 //! ```
+//!
+//! Note: `host` used to be a parameter on this command. Mythic's UI
+//! already tags downloads with the originating callback's host
+//! server-side, so the operator never needs to supply it; we
+//! removed it to stop the tasking panel from prompting for it on
+//! every `download`.
 
 use std::fs::File;
 use std::io::Read;
@@ -37,8 +42,6 @@ use crate::push_extra;
 #[derive(Deserialize)]
 struct Params {
     path: String,
-    #[serde(default)]
-    host: Option<String>,
     /// Chunk size in bytes (default 512 KiB). Clamped to [64 KiB, 8 MiB].
     #[serde(default)]
     chunk_size: Option<u32>,
@@ -79,7 +82,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".into());
     let full_path = path.to_string_lossy().to_string();
-    let host = params.host;
 
     // 1. Open file and get total size
     let mut file = match File::open(path) {
@@ -189,7 +191,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 chunk_data: Some(encoded),
                 filename: Some(filename.clone()),
                 full_path: Some(full_path.clone()),
-                host: host.clone(),
+                // host left None — Mythic fills it from the callback
+                host: None,
                 is_screenshot: false,
                 file_id: Some(file_id),
             }),

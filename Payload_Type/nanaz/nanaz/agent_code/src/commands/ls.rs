@@ -4,11 +4,22 @@
 //! ```json
 //! {
 //!     "path": "/home/user",
-//!     "host": "optional-hostname"
+//!     "recursive": false
 //! }
 //! ```
 //!
 //! Response: `TaskResponse.file_browser` with a [`FileBrowserEntry`] tree.
+//!
+//! Notes on the `set_as_user_output` / `user_output` interaction:
+//!
+//! The Mythic UI in its new (file-browser) mode shows the structured
+//! payload by default, not `user_output`. We deliberately leave
+//! `user_output` empty here so the Python `LsCommand.process_response`
+//! is the *only* writer of the human-readable table — without that
+//! discipline, the operator would see two output blocks (one from
+//! the structured payload, one from the user_output text) for every
+//! single `ls` call. Earlier versions had this race and the resulting
+//! doubled output was the most-reported UI bug in the operator chat.
 
 use std::fs;
 use std::path::Path;
@@ -181,6 +192,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     if meta.is_file() {
         // Single file listing — surface the entry directly so the UI
         // shows the file without us having to write a separate stdout.
+        // `set_as_user_output` would force the structured payload into
+        // the user_output field; combined with the Python wrapper
+        // writing a second formatted table this used to produce a
+        // doubled output. We leave both flags off and let the Python
+        // wrapper emit the human-readable line.
         let entry = FileBrowserEntry {
             is_file: true,
             name: resolved
@@ -196,7 +212,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             permissions: permissions_value(&meta),
             success: Some(true),
             update_deleted: true,
-            set_as_user_output: true,
             ..Default::default()
         };
         TaskResponse {
@@ -227,8 +242,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
         // The structured `file_browser` payload is what the Mythic UI
         // consumes. The Python `LsCommand.process_response` writes a
-        // human-readable table via `MythicRPCTaskUpdate`. Avoid setting
-        // `user_output` here to prevent a duplicate summary in the UI.
+        // human-readable table via `MythicRPCTaskUpdate`. We
+        // deliberately leave `user_output` empty here and DO NOT set
+        // `set_as_user_output: true` — either of those would race with
+        // the Python-side formatter and produce a doubled block.
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
@@ -245,7 +262,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     .map(|p| p.to_string_lossy().to_string()),
                 success: Some(true),
                 update_deleted: true,
-                set_as_user_output: true,
                 files,
                 ..Default::default()
             }),
@@ -304,5 +320,23 @@ mod tests {
         let resp = handle(&task);
         let fb = resp.file_browser.expect("file_browser set");
         assert_eq!(fb.success, Some(false));
+    }
+
+    #[test]
+    fn test_ls_user_output_not_set() {
+        // Regression guard: the doubled-output bug used to occur when
+        // both `set_as_user_output: true` AND the Python wrapper wrote
+        // a formatted table. The fix keeps `user_output` empty here.
+        let dir = unique_tmp("no-double");
+        std::fs::write(dir.join("a.txt"), b"x").unwrap();
+        let task = TaskMessage {
+            command: "ls".into(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() })
+                .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert!(resp.user_output.is_none(), "user_output must be None to avoid double-display");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

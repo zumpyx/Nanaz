@@ -87,3 +87,83 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => TaskResponse::failed(task.id, &format!("{}: {e}", path.display())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn unique_tmp(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut p = std::env::temp_dir();
+        p.push(format!("nanaz-rm-test-{label}-{pid}-{n}"));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn test_rm_file() {
+        let dir = unique_tmp("file");
+        let f = dir.join("victim.txt");
+        std::fs::write(&f, b"x").unwrap();
+        let task = TaskMessage {
+            command: "rm".into(),
+            parameters: serde_json::json!({ "path": f.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(!f.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rm_dir_requires_recursive() {
+        let dir = unique_tmp("dir-no-rec");
+        let task = TaskMessage {
+            command: "rm".into(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rm_recursive_requires_confirm() {
+        let dir = unique_tmp("dir-no-confirm");
+        let task = TaskMessage {
+            command: "rm".into(),
+            parameters: serde_json::json!({
+                "path": dir.to_string_lossy(),
+                "recursive": true
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_rm_recursive_with_confirm() {
+        let dir = unique_tmp("dir-confirmed");
+        let task = TaskMessage {
+            command: "rm".into(),
+            parameters: serde_json::json!({
+                "path": dir.to_string_lossy(),
+                "recursive": true,
+                "confirm_destructive": true
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(!dir.exists());
+    }
+}

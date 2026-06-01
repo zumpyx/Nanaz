@@ -4,12 +4,9 @@
 //! macOS: uses `ps` command.
 //! Windows: uses `wmic` command (or fallback to `tasklist`).
 //!
-//! Task parameters (JSON):
-//! ```json
-//! {
-//!     "host": "optional-hostname"
-//! }
-//! ```
+//! Task parameters: none. `ps` accepts no arguments; the operator
+//! doesn't need to supply a `host` because Mythic tags each process
+//! with the originating callback's host server-side.
 //!
 //! Response: `TaskResponse.processes` with a `Vec<ProcessEntry>`.
 
@@ -21,11 +18,11 @@ use crate::sys::encoding::decode_output;
 
 // ── Params ──────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct Params {
-    #[serde(default)]
-    host: Option<String>,
-}
+/// `ps` takes no parameters. The struct is kept as a placeholder
+/// for symmetry with other commands and to give `serde_json` a
+/// well-defined (empty) schema to validate against.
+#[derive(Deserialize, Default)]
+struct Params {}
 
 /// Linux `USER_HZ` — the kernel's clock-tick rate. Defaults to 100, but
 /// Docker-on-Mac hosts, some embedded kernels, and tickless configs use
@@ -251,23 +248,23 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
 // ── Main handler ────────────────────────────────────────────
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
-    let params = match serde_json::from_str::<Params>(&task.parameters) {
-        Ok(p) => p,
-        Err(e) => return TaskResponse::failed(task.id, &format!("ps parse error: {e}")),
-    };
+    // `ps` accepts no parameters. We still validate that the parameter
+    // string parses as an empty object — an operator who types
+    // `ps -foo` will get a structured parameter-error response here
+    // rather than a successful empty process list.
+    if let Err(e) = serde_json::from_str::<Params>(&task.parameters) {
+        return TaskResponse::failed(task.id, &format!("ps parse error: {e}"));
+    }
 
     match list_processes() {
         Ok(mut procs) => {
-            // Only set host if explicitly provided; otherwise let Mythic auto-fill
-            let host = params.host.filter(|h| !h.is_empty()).unwrap_or_default();
-
-            // Mark for auto-cleanup on all entries
+            // Mark for auto-cleanup on all entries. The `host` field
+            // on each entry is left empty — Mythic fills it from the
+            // callback's host server-side, so we don't need to set it
+            // here (and previously did via a now-removed Params.host
+            // field that the operator never typed anyway).
             for p in &mut procs {
                 p.update_deleted = true;
-                if !host.is_empty() {
-                    p.host = host.clone();
-                }
-                // host left empty → Mythic fills from callback info
             }
 
             // The `user_output` is intentionally None — the Python

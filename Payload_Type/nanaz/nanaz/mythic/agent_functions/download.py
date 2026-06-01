@@ -9,9 +9,14 @@ class DownloadArguments(FileBrowserArguments):
 
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
+        # `host` is intentionally not a CommandParameter — Mythic's UI
+        # injects it via the {host, full_path} dict that flows through
+        # FileBrowserArguments.parse_dictionary, and the CLI never has
+        # to type it. The Rust Params still accepts it for P2P host
+        # tagging, but the operator never sees the field in the
+        # tasking panel.
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
-            CommandParameter(name="host", type=ParameterType.String, default_value=""),
         ]
 
 

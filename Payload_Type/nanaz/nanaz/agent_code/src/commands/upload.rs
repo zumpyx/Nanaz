@@ -15,7 +15,6 @@
 //! {
 //!     "path": "/tmp/payload.exe",
 //!     "file_bytes": "<base64_encoded_contents>",
-//!     "host": "optional-hostname",
 //!     "allow_system_path": false,  // optional, default false
 //!     "max_bytes": 268435456        // optional, override cap (default 256 MiB)
 //! }
@@ -39,9 +38,6 @@ struct Params {
     path: String,
     /// Base64-encoded file contents.
     file_bytes: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    host: Option<String>,
     /// When true, allows writes to system / boot directories that are
     /// usually destructive to overwrite. Default false.
     #[serde(default)]
