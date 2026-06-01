@@ -62,7 +62,7 @@ class Nanaz(PayloadType):
             config_path.write_text(json.dumps(config, indent=4))
 
             # --- compile ---
-            triple = TARGETS.get(target_os)
+            triple = TARGETS[target_os]
             cargo_args = ["zigbuild", "--target", triple]
             if not debug:
                 cargo_args.insert(1, "-r")
@@ -75,7 +75,10 @@ class Nanaz(PayloadType):
                 stderr=asyncio.subprocess.STDOUT,
             )
 
-            async for line in proc.stdout:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
                 print(line.decode("utf-8", errors="ignore").rstrip(), flush=True)
             await proc.wait()
 
