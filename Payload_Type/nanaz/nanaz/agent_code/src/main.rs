@@ -24,10 +24,10 @@ mod agent;
 mod c2;
 mod common;
 mod config;
+mod dispatch;
 mod error;
 pub use error::{Error, Result};
 mod sys;
-mod tasks;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::cell::RefCell;

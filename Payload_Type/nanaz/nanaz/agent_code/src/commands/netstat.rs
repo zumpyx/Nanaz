@@ -125,64 +125,115 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
     Ok(entries)
 }
 
-// ── macOS: use lsof ─────────────────────────────────────────
+// ── macOS: prefer netstat, fall back to lsof ────────────────
+//
+// Format we parse (BSD netstat):
+//   Active Internet Connections (including servers)
+//   Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)
+//   tcp4       0      0  192.168.1.10.443       10.0.0.5.51234        ESTABLISHED
+//   tcp6       0      0  fe80::1.443            fe80::2.51234         ESTABLISHED
+//   udp4       0      0  *.5353                 *.*
 
 #[cfg(target_os = "macos")]
 fn list_connections() -> Result<Vec<NetEntry>, String> {
-    let output = std::process::Command::new("lsof")
-        .args(["-i", "-n", "-P"])
+    // Try `netstat -an -W -p tcp,udp` first (built-in, no SIP impact); fall
+    // back to lsof if netstat is missing on a stripped host. -W truncates
+    // wide output so the columns line up.
+    let output = std::process::Command::new("netstat")
+        .args(["-an", "-W", "-p", "tcp"])
         .output()
-        .or_else(|_| {
-            std::process::Command::new("netstat")
-                .args(["-an", "-p", "tcp"])
-                .output()
-        })
-        .map_err(|e| format!("lsof/netstat failed: {e}"))?;
+        .or_else(|_| std::process::Command::new("lsof").args(["-i", "-n", "-P"]).output())
+        .map_err(|e| format!("netstat/lsof failed: {e}"))?;
 
     let stdout = decode_output(&output.stdout);
     let mut entries = Vec::new();
+    let mut in_active_block = false;
 
-    for line in stdout.lines().skip(1) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 9 {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Active Internet") {
+            in_active_block = true;
             continue;
         }
-        // lsof format: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
-        let name = parts[0].to_string();
-        let pid: Option<i64> = parts[1].parse().ok();
-        let addr_str = parts.last().unwrap_or(&"");
+        if !in_active_block {
+            continue;
+        }
+        if trimmed.starts_with("Proto") {
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        // netstat -W columns are space-padded but variable-width; split on
+        // whitespace to get the field array.
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let proto = parts[0].to_lowercase();
+        if !(proto.starts_with("tcp") || proto.starts_with("udp")) {
+            continue;
+        }
+        let local = parts[3];
+        let remote = parts[4];
+        // state is at index 5 if present (only TCP, not UDP)
+        let state = if parts.len() >= 6 {
+            parts[5].to_string()
+        } else if proto.starts_with("udp") {
+            "LISTEN".to_string()
+        } else {
+            "UNKNOWN".to_string()
+        };
 
-        // Parse "host:port->host:port" or "host:port"
-        if let Some((local, remote)) = addr_str.split_once("->") {
-            let local_parts: Vec<&str> = local.rsplitn(2, ':').collect();
-            let remote_parts: Vec<&str> = remote.rsplitn(2, ':').collect();
-            if local_parts.len() == 2 && remote_parts.len() == 2 {
-                entries.push(NetEntry {
-                    protocol: if addr_str.contains("UDP") { "udp" } else { "tcp" }.into(),
-                    local_addr: local_parts[1].to_string(),
-                    local_port: local_parts[0].parse().unwrap_or(0),
-                    remote_addr: remote_parts[1].to_string(),
-                    remote_port: remote_parts[0].parse().unwrap_or(0),
-                    state: "ESTABLISHED".into(),
-                    pid,
-                });
-            }
-        } else if addr_str.contains(':') {
-            let parts: Vec<&str> = addr_str.rsplitn(2, ':').collect();
-            if parts.len() == 2 {
-                entries.push(NetEntry {
-                    protocol: if name.contains("UDP") { "udp" } else { "tcp" }.into(),
-                    local_addr: parts[1].to_string(),
-                    local_port: parts[0].parse().unwrap_or(0),
-                    remote_addr: "0.0.0.0".into(),
-                    remote_port: 0,
-                    state: "LISTEN".into(),
-                    pid,
-                });
-            }
+        if let Some(entry) = parse_addr_pair(&proto, local, remote, &state, None) {
+            entries.push(entry);
         }
     }
     Ok(entries)
+}
+
+/// Parse a `host.port` pair from netstat-style output into local/remote fields.
+#[cfg(target_os = "macos")]
+fn parse_addr_pair(
+    proto: &str,
+    local: &str,
+    remote: &str,
+    state: &str,
+    pid: Option<i64>,
+) -> Option<NetEntry> {
+    let (la, lp) = split_hostport(local)?;
+    let (ra, rp) = if remote == "*.*" || remote == "*" {
+        ("0.0.0.0".to_string(), 0)
+    } else {
+        split_hostport(remote)?
+    };
+    Some(NetEntry {
+        protocol: proto.into(),
+        local_addr: la,
+        local_port: lp,
+        remote_addr: ra,
+        remote_port: rp,
+        state: state.into(),
+        pid,
+    })
+}
+
+/// Split a `host.port` string from netstat into (host, port). Handles the
+/// IPv6 `[::1].443` form as well as plain `127.0.0.1.80`.
+#[cfg(target_os = "macos")]
+fn split_hostport(s: &str) -> Option<(String, u16)> {
+    // IPv6 literal: '[addr].port'  e.g. '[fe80::1].443'
+    if s.starts_with('[') {
+        let end = s.find("].")?;
+        let host = s[1..end].to_string();
+        let port: u16 = s[end + 2..].parse().ok()?;
+        return Some((host, port));
+    }
+    // Plain 'host.port' — find the LAST dot
+    let dot = s.rfind('.')?;
+    let host = s[..dot].to_string();
+    let port: u16 = s[dot + 1..].parse().ok()?;
+    Some((host, port))
 }
 
 // ── Windows: netstat -ano ───────────────────────────────────

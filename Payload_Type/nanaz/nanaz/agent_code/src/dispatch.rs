@@ -1,38 +1,38 @@
-#[path = "tasks/cat.rs"]
+#[path = "commands/cat.rs"]
 mod cat;
-#[path = "tasks/cp.rs"]
+#[path = "commands/cp.rs"]
 mod cp;
-#[path = "tasks/download.rs"]
+#[path = "commands/download.rs"]
 mod download;
-#[path = "tasks/env.rs"]
+#[path = "commands/env.rs"]
 mod env;
-#[path = "tasks/exit.rs"]
+#[path = "commands/exit.rs"]
 mod exit;
-#[path = "tasks/ls.rs"]
+#[path = "commands/ls.rs"]
 mod ls;
-#[path = "tasks/mkdir.rs"]
+#[path = "commands/mkdir.rs"]
 mod mkdir;
-#[path = "tasks/mv.rs"]
+#[path = "commands/mv.rs"]
 mod mv;
-#[path = "tasks/netstat.rs"]
+#[path = "commands/netstat.rs"]
 mod netstat;
-#[path = "tasks/ps.rs"]
+#[path = "commands/ps.rs"]
 mod ps;
-#[path = "tasks/resolve.rs"]
+#[path = "commands/resolve.rs"]
 mod resolve;
-#[path = "tasks/rm.rs"]
+#[path = "commands/rm.rs"]
 mod rm;
-#[path = "tasks/shell.rs"]
+#[path = "commands/shell.rs"]
 mod shell;
-#[path = "tasks/sleep.rs"]
+#[path = "commands/sleep.rs"]
 mod sleep;
-#[path = "tasks/sysinfo.rs"]
+#[path = "commands/sysinfo.rs"]
 mod sysinfo;
-#[path = "tasks/upload.rs"]
+#[path = "commands/upload.rs"]
 mod upload;
-#[path = "tasks/wget.rs"]
+#[path = "commands/wget.rs"]
 mod wget;
-#[path = "tasks/whoami.rs"]
+#[path = "commands/whoami.rs"]
 mod whoami;
 
 use mythic::{TaskMessage, TaskResponse};

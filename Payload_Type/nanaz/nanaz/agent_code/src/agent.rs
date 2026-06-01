@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::c2::C2Profile;
+use crate::dispatch;
 use crate::sys::metadata;
-use crate::tasks;
 use crate::{
     DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep, take_extra,
 };
@@ -23,7 +23,7 @@ use crate::{
 /// Dispatch a task, catching panics so one bad handler can't crash the agent.
 fn safe_dispatch(task: &mythic::TaskMessage) -> TaskResponse {
     let t = task.clone();
-    catch_unwind(move || tasks::dispatch(&t))
+    catch_unwind(move || dispatch::dispatch(&t))
         .unwrap_or_else(|_| TaskResponse::failed(task.id, "task handler panicked"))
 }
 
