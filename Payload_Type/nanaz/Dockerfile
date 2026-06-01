@@ -23,7 +23,7 @@ RUN wget https://static.rust-lang.org/dist/${RUST}.tar.xz && \
     ln -s /usr/local/share/${RUST}/rustfmt-preview/bin/* /usr/local/bin/ && \
     ln -s /usr/local/share/${RUST}/rust-analyzer-preview/bin/* /usr/local/bin/ && \
     ln -s /usr/local/share/${RUST}/rust-std-${RUST_TARGET}/lib/rustlib/${RUST_TARGET}/lib \
-        /usr/local/share/${RUST}/rustc/lib/rustlib/${RUST_TARGET}/lib
+        /usr/local/share/${RUST}/rustc/lib/rustlib/${RUST_TARGET}/lib && \
     cargo install cargo-zigbuild --root /usr/local --no-track && \
     rm -rf /root/.cargo/registry && \
     rm -rf /root/.cargo/git && \
