@@ -1,86 +1,233 @@
-# Mythic External Agent
+# nanaz — Cross-platform Rust agent for Mythic
 
-This repo defines the folder structure for an external Mythic agent that can be remotely "installed" into a Mythic instance. This process allows users to create their own Mythic agents and host them on their own GitHub repositories while also allowing an easy process to install agents.
+A Mythic payload type written in Rust. Single source tree, cross-compiled to
+Windows + Linux via `cargo-zigbuild` and the `mythic-c2` C2 framework. Targets
+operations that want a small, hard-to-analyse binary with a focused, audited
+command surface.
 
-## How to use this git project
+| | |
+|---|---|
+| Language | Rust (edition 2024) |
+| C2 profile | `http` (Mythic 3.x `http` C2 profile) |
+| Platforms | Windows `x86_64-pc-windows-gnu`, Linux `x86_64-unknown-linux-musl` |
+| Memory footprint | O(chunk) during download, no pre-alloc |
+| Source size | ~3 000 LoC Rust + ~1 000 LoC Python |
 
-This project is a template for what _your_ git-based repository should look like. Simply copy/fork this project and update it with your agent's information. Then, you can use the corresponding install command from within the Mythic repo to install this agent. The Mythic install script for 3rd party agents should work for any git-based repository (GitHub, GitLab, Bitbucket, etc).
+---
+
+## Install in Mythic
+
+```bash
+sudo ./mythic-cli install github https://github.com/zumpyx/Nanaz
+sudo ./mythic-cli start nanaz        # only the payload type container
+sudo ./mythic-cli start              # or restart everything
+```
+
+`mythic-cli install github` clones the repo into Mythic's
+`Payload_Types/nanaz/` and the builder runs inside the container.
+
+---
+
+## Build
+
+The builder is `Payload_Type/nanaz/nanaz/mythic/agent_functions/builder.py`.
+It writes a `config.json` (C2 profile + PSK + UUID) and shells out to
+`cargo zigbuild --target <triple>`.
+
+```bash
+# Inside the nanaz container:
+cat > /tmp/build.sh <<'EOF'
+cd /Mythic/nanaz/agent_code
+cargo zigbuild --target x86_64-pc-windows-gnu --release
+cargo zigbuild --target x86_64-unknown-linux-musl --release
+EOF
+bash /tmp/build.sh
+```
+
+Output:
+
+- `nanaz/agent_code/target/x86_64-pc-windows-gnu/release/nanaz.exe`
+- `nanaz/agent_code/target/x86_64-unknown-linux-musl/release/nanaz`
+
+Both are stripped (`strip = "symbols"`) and panic-on-unwind
+(`panic = "abort"`). On Windows, release builds hide the console
+(`windows_subsystem = "windows"`).
+
+---
+
+## Run modes
 
 ```
-sudo ./mythic-cli install github <url to your agent> [optional branch name]
+# Foreground (debug) — eprintln! output, sleeps on SIGHUP
+cargo run --release
+
+# Daemonised (Linux release) — fork to background, detach, dup2 /dev/null
+cargo run --release        # automatically daemonises
 ```
 
+On Linux release, the agent:
 
-## How to install an agent in this format within Mythic
+1. Forks and exits the parent.
+2. `setsid` to detach from the controlling terminal.
+3. Closes fds 0/1/2 and reopens them against `/dev/null`.
+4. `chdir /` so the launcher's cwd is not held busy.
+5. Ignores `SIGHUP`.
 
-When it's time for you to test out your install or for another user to install your agent, it's pretty simple. Within Mythic is a `mythic-cli` binary you can use to install agents:
+The Mythic container picks up the built binary; operators see the file
+in the Mythic UI's payload-type page.
 
-* `sudo ./mythic-cli install github https://github.com/user/repo` to install the main branch
-* `sudo ./mythic-cli install github https://github.com/user/repo -b branchname` to install a specific branch of that repo
+---
 
-Now, you might be wondering _when_ should you or a user do this to properly add your agent to their Mythic instance. There's no wrong answer here, just depends on your preference. The three options are:
+## C2 profile
 
-* Mythic is already up and going, then you can run the install script and just direct that agent's containers to start (i.e. `sudo ./mythic-cli start agentName` and if that agent has its own special C2 containers, you'll need to start them too via `sudo ./mythic-cli start c2profileName`).
-* Mythic is already up and going, but you want to minimize your steps, you can just install the agent and run `sudo ./mythic-cli start`. That script will first _stop_ all of your containers, then start everything back up again. This will also bring in the new agent you just installed.
-* Mythic isn't running, you can install the script and just run `sudo ./mythic-cli start`. 
+This agent speaks Mythic's `http` C2 profile. The container's
+`config.json` (per-payload, generated at build time) carries:
 
+```json
+{
+  "payload_uuid": "...",
+  "c2_profiles": [
+    {
+      "http": {
+        "aes_psk": "...",
+        "callback_host": "https://...",
+        "callback_interval": 10,
+        "callback_jitter": 23,
+        "callback_port": 80,
+        "encrypted_exchange_check": false,
+        "get_uri": "index",
+        "post_uri": "data",
+        "query_path_name": "q",
+        "headers": { "User-Agent": "..." },
+        "killdate": "2099-12-31",
+        "insecure_skip_tls_verify": true,
+        "external_ip_check": false
+      }
+    }
+  ]
+}
+```
 
-## Folder Structure
+### Configuration knobs
 
-### Payload_Type
+| Field | Default | Effect |
+|---|---|---|
+| `insecure_skip_tls_verify` | `true` | Skip TLS cert verification (C2 self-signed). Set `false` in monitored networks — will fail closed until you add a root store. |
+| `external_ip_check` | `false` | When `true`, the agent queries `https://api.ipify.org` at check-in. Off by default — the egress is a strong blue-team indicator. |
+| `callback_interval` | required | Seconds between polls. `0` is allowed (busy-loop, useful for testing). |
+| `callback_jitter` | `0` | Percent of `interval` added as random extra sleep. |
+| `killdate` | empty | ISO date (`YYYY-MM-DD`). After this, the agent exits before the next round. |
 
-This folder should contain exactly what you have in your `Payload_Types` folder for Mythic. Specifically, it should contain one folder with the same name as your agent. 
+---
 
-Example: https://github.com/its-a-feature/Mythic/tree/master/Payload_Types
+## Commands
 
-### C2_Profiles
+| Command | Args | Notes |
+|---|---|---|
+| `cat` | `path` | Read file. Cross-platform encoding detection (UTF-8 → Windows ANSI code page fallback). |
+| `cd` / `pwd` | — | *Not implemented* (intentional — Mythic UI handles pwd). |
+| `cp` | `src dst` | Cross-platform. Auto-creates dst parent. |
+| `download` | `path` | Multi-chunk, streaming. Default 512 KiB chunks (configurable via `chunk_size`). No upper bound on file size. |
+| `env` | `[key]` | List env vars, optionally filtered by substring. |
+| `exit` | `process` / `thread` | Stop the beacon. `process` flushes pending then exits; `thread` is a legacy alias. |
+| `ls` | `[path] [-r]` | File browser. `~` expansion, recursive mode, dirs first sort. |
+| `mkdir` | `path` | `mkdir -p` semantics. |
+| `mv` | `src dst` | Renames; falls back to copy+delete on `EXDEV` (cross-filesystem). |
+| `netstat` | — | TCP/UDP connection table. Linux: `/proc/net/tcp{,6}` + `udp{,6}`. macOS: `netstat -an -W -p tcp`. Windows: `netstat -ano`. |
+| `ps` | — | Process listing. Linux: `/proc` walk. macOS: `ps`. Windows: `wmic` (with `tasklist` fallback). |
+| `resolve` | `hostname` | DNS resolve. `std::net::ToSocketAddrs`. |
+| `rm` | `path [-r]` | File browser. `recursive=true` for directories. |
+| `shell` | `command [shell] [timeout]` | Run via `cmd` / `powershell` / `bash` / `sh`. Default timeout 60s. |
+| `sleep` | `interval [jitter]` | Change polling cadence at runtime. |
+| `sysinfo` | — | OS, kernel, CPU, memory, uptime. |
+| `upload` | `path` + file | Base64 in `file_bytes`. Max 256 MiB. Refuses system paths unless `allow_system_path=true`. |
+| `wget` | `url [path]` | HTTPS GET, write to disk. |
+| `whoami` | — | `user`, `uid`/`gid` (Unix), `home`, `hostname`. |
 
-This folder should contain exactly what you have in your `C2_Profiles` folder if you added a new C2 Profile for your agent. Specifically, it should containe a folder with the name of the C2 Profile for every C2 Profile you added. If you have no additional C2 Profiles, leave this folder empty.
+### UI integration
 
-Example: https://github.com/its-a-feature/Mythic/tree/master/C2_Profiles
+- File browser: `ls`, `download`, `upload`, `rm`
+- Process browser: `ps`
+- MITRE ATT&CK mapping on every command (`attackmapping = [...]`)
 
-### documentation-c2
+---
 
-This folder contains all of the contents for the documentation-docker container that petains to your new C2 profiles (if any). If you have no extra documentation, then leave this folder empty.
+## Repo layout
 
-Example: https://github.com/its-a-feature/Mythic/tree/master/documentation-docker/content/C2%20Profiles
+```
+.
+├── Payload_Type/nanaz/             # Mythic container
+│   ├── main.py                     # mythic_container entry point
+│   ├── Dockerfile                  # python_base + Rust + zig
+│   ├── rabbitmq_config.json        # (gitignored, see .gitignore)
+│   └── nanaz/
+│       ├── agent_code/             # Rust source
+│       │   ├── Cargo.toml
+│       │   ├── config.json         # (gitignored — built per payload)
+│       │   ├── config.example.json
+│       │   └── src/
+│       │       ├── main.rs         # entry, daemonisation
+│       │       ├── agent.rs        # beacon loop, killdate, jitter
+│       │       ├── config.rs       # embedded JSON loader
+│       │       ├── dispatch.rs     # command -> handler routing
+│       │       ├── c2/             # http C2 transport
+│       │       ├── sys/            # metadata, network, encoding
+│       │       └── commands/       # 18 command handlers
+│       └── mythic/agent_functions/ # 18 Python command defs
+│           ├── _base.py            # FileBrowserArguments + helpers
+│           ├── builder.py
+│           └── <command>.py
+├── agent_icons/nanaz.svg
+├── config.json                     # Mythic install config
+└── README.md
+```
 
-### documentation-payload
+---
 
-This folder contains all of the contents for the documentation-docker container that pertains to your new payload type. If you have no documentation (you reall should though), then leave this folder empty.
+## Development
 
-Example: https://github.com/its-a-feature/Mythic/tree/master/documentation-docker/content/Agents 
+```bash
+cd Payload_Type/nanaz/nanaz/agent_code
+cargo check                # quick syntax + types
+cargo test                 # 10 unit tests (no Mythic required)
+cargo check --target x86_64-pc-windows-gnu   # cross-platform sanity
+cargo build --release      # full optimised build (Linux)
+```
 
-### documentation-wrapper
+Tests cover `cat`, `download`, `ls`, `upload`, `ps`, `encoding` and the
+embedded config loader. End-to-end Mythic communication requires a
+running Mythic instance — see `mythic-docs/`.
 
-If you are creating any "wrapper" style payload types, the documentation for those go in a slightly different location with a slightly different format. Wrapper payload types don't have any C2 or commands associated with them; instead, they take in another agent and "wrap" it with a more generic mechanism (service executable, office macro, obfuscation, etc). While the wrapper payload type code goes into the same Payload_Type area, the documentation is broken out. Copy that documentation here similar to:
+### Toolchain
 
-https://github.com/its-a-feature/Mythic/tree/master/documentation-docker/content/Wrappers
+The container pins:
 
-### agent_icons
+- `RUST_VERSION=1.85.0`
+- `ZIG_VERSION=0.16.0`
+- `CARGO_ZIGBUILD_VERSION=0.19.10`
 
-This folder contains the svg icons that should be used for the agent. This svg icon is used on the Payload Types page, on the active callbacks page, and when viewing the graph/tree modes of your callbacks.
+to avoid surprises when lockfile v4 parsing or zigbuild upstream
+breaking changes hit.
 
-## Config.json
+---
 
-This file configures which components to ignore on the install process.
+## Security notes
 
-### exclude_payload_type
+- **AES PSK** is generated per-payload by Mythic and embedded at build
+  time. Treat `agent_code/config.json` as a secret — it is gitignored.
+- **TLS** defaults to `insecure_skip_tls_verify=true` for compatibility
+  with self-signed C2 certificates. In a monitored network, set it to
+  `false` and supply a root store.
+- **Upload** refuses system paths (`/etc`, `C:\Windows`, …) unless the
+  task sets `allow_system_path=true`. Max 256 MiB per upload.
+- **Download** has no upper size limit, but reads in chunks so memory
+  is bounded.
+- The agent does **not** enable `encrypted_exchange_check` (the
+  Noise_KK EKE handshake) by default; configure it through the C2
+  profile if you need forward secrecy.
 
-Setting this value to `true` means that after cloning down the remote repository, the installer program will _NOT_ copy the contents of the `Payload_Type` folder into the local `Payload_Types` folder. This is helpful for when an agent's Payload Type contents needs to be installed on a specific computer/VM and _not_ used as part of a Docker deployment.
+---
 
-### exclude_c2_profiles
+## License
 
-Setting this value to `true` means that after cloning down the remote repository, the installer program wil _NOT_ copy the contents of the `C2_Profiles` folder into the local `C2_Profiles` folder. This is helpful for when an agent's C2 Profiles might need to run on a different Computer/VM and _not_ used as part of a Docker deployment locally to Mythic.
-
-### exclude_documentation_payload
-
-Setting this value to `true` will prevent Mythic from copying the contents into the documentation-docker's agent folders.
-
-### exclude_documentation_c2
-
-Setting this value to `true` will prevent Mythic from copying the contents into the documentation-docker's c2 folders.
-
-### exclude_agent_icons
-
-Setting this value to `true` will prevent Mythic from copying the contents into the mythic-docker/app/static folder with the other icons.
+See [LICENSE](LICENSE).
