@@ -32,7 +32,19 @@ mod sys;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::cell::RefCell;
 
+// Pick the embedded config source at compile time.
+//
+// `build.rs` sets `has_real_config` when `agent_code/config.json` is
+// present (the production / Mythic-builder path). In a fresh clone the
+// real file is gitignored, so we fall back to the tracked
+// `config.example.json` placeholder — `cargo check` / `cargo test`
+// work without a pre-build step, and `Config::load_json` rejects the
+// placeholder at runtime with a clean `exit 2`.
+#[cfg(has_real_config)]
 const RAW_JSON: &str = include_str!("../config.json");
+
+#[cfg(not(has_real_config))]
+const RAW_JSON: &str = include_str!("../config.example.json");
 
 // ── Global state ────────────────────────────────────────
 
