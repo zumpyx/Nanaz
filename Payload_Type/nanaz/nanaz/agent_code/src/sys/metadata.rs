@@ -1,5 +1,7 @@
 use std::env;
-use std::process::{Command, id};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::id;
 
 pub fn hostname() -> Option<String> {
     #[cfg(windows)]

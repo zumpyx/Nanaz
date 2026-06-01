@@ -14,6 +14,7 @@ pub fn decode(s: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Encode raw bytes as a standard base64 string.
+#[allow(dead_code)] // only used by upload.rs tests
 pub fn encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)

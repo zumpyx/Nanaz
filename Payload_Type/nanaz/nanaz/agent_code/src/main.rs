@@ -43,9 +43,9 @@ pub static EXIT_PROCESS: AtomicBool = AtomicBool::new(false);
 pub static KILLDATE: AtomicU64 = AtomicU64::new(0);
 pub static DEBUG: AtomicBool = AtomicBool::new(false);
 
-/// Thread-local buffer for handlers that need to emit multiple
-/// `TaskResponse`s (e.g. multi-chunk `download`). The agent loop drains this
-/// after each `safe_dispatch` and appends to `pending` before the next round.
+// Thread-local buffer for handlers that need to emit multiple
+// `TaskResponse`s (e.g. multi-chunk `download`). The agent loop drains this
+// after each `safe_dispatch` and appends to `pending` before the next round.
 thread_local! {
     pub static EXTRA_RESPONSES: RefCell<Vec<mythic::TaskResponse>> = const { RefCell::new(Vec::new()) };
 }

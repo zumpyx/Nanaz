@@ -1,5 +1,4 @@
 // src/config.rs
-use crate::Result;
 use crate::c2::C2Profile;
 use serde::Deserialize;
 

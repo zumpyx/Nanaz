@@ -11,7 +11,6 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::c2::C2Profile;
 use crate::dispatch;
 use crate::sys::metadata;
 use crate::{
