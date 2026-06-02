@@ -137,7 +137,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             params.pid as u32,
         )
     };
-    if handle == 0 {
+    if handle.is_null() {
         let err = std::io::Error::last_os_error();
         return TaskResponse::failed(
             task.id,
