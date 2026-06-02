@@ -12,7 +12,7 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 /// Platform-specific error code meaning "source and destination are on
 /// different filesystems; rename is impossible, copy + delete required".
@@ -49,29 +49,32 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // Dst side — refuse to write into protected trees.
-    if !params.allow_system_path && is_protected_path(&params.dst) {
+    let src_str = normalize_user_path(&params.src);
+    let dst_str = normalize_user_path(&params.dst);
+
+    if !params.allow_system_path && is_protected_path(&dst_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to write to system path {}; set allow_system_path=true to override",
-                params.dst
+                dst_str
             ),
         );
     }
     // Src side — refuse to *delete* (rename away from) a protected
     // path unless explicitly opted in.
-    if !params.allow_source_system_path && is_protected_path(&params.src) {
+    if !params.allow_source_system_path && is_protected_path(&src_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to remove from system path {}; set allow_source_system_path=true to override",
-                params.src
+                src_str
             ),
         );
     }
 
-    let src = Path::new(&params.src);
-    let dst = Path::new(&params.dst);
+    let src = Path::new(&src_str);
+    let dst = Path::new(&dst_str);
 
     // Create parent dirs of dst if needed
     if let Some(parent) = dst.parent() {
@@ -85,7 +88,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(format!("moved {} → {}", src.display(), dst.display())),
+            user_output: Some(format!("moved {} → {}", display_path(src), display_path(dst))),
             ..Default::default()
         },
         Err(e) if is_cross_device(&e) => {
@@ -98,8 +101,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         status: Some("completed".into()),
                         user_output: Some(format!(
                             "moved (copy+delete) {} → {} ({} bytes)",
-                            src.display(),
-                            dst.display(),
+                            display_path(src),
+                            display_path(dst),
                             n
                         )),
                         ..Default::default()
@@ -108,8 +111,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         task.id,
                         &format!(
                             "copied {} → {} but failed to remove source: {e}",
-                            src.display(),
-                            dst.display()
+                            display_path(src),
+                            display_path(dst)
                         ),
                     ),
                 },
@@ -117,15 +120,15 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     task.id,
                     &format!(
                         "rename and copy both failed for {} → {}: {e}",
-                        src.display(),
-                        dst.display()
+                        display_path(src),
+                        display_path(dst)
                     ),
                 ),
             }
         }
         Err(e) => TaskResponse::failed(
             task.id,
-            &format!("rename {} → {} failed: {e}", src.display(), dst.display()),
+            &format!("rename {} → {} failed: {e}", display_path(src), display_path(dst)),
         ),
     }
 }

@@ -18,7 +18,12 @@ explicitly.
 
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
+from ._base import (
+    FileBrowserArguments,
+    error_aware_process_response,
+    simple_command_attributes,
+    split_cli_preserve_backslashes,
+)
 
 
 class RmArguments(FileBrowserArguments):
@@ -53,10 +58,15 @@ class RmArguments(FileBrowserArguments):
         # who type the natural `rm -rf foo` would have to type the
         # long flags separately, which defeats the purpose of the
         # shorthand.
+        try:
+            parts = split_cli_preserve_backslashes(cl)
+        except ValueError as e:
+            raise Exception(f"rm: failed to parse command line: {e}")
+
         recursive = False
         confirm = False
         path_parts = []
-        for tok in cl.split():
+        for tok in parts:
             low = tok.lower()
             if low in ("-r", "--recursive"):
                 recursive = True
@@ -73,11 +83,7 @@ class RmArguments(FileBrowserArguments):
                 path_parts.append(tok)
         if not path_parts:
             raise Exception("rm: missing path argument")
-        # First non-flag token is the path. We deliberately don't
-        # support multi-arg `rm a b c` because the Mythic UI never
-        # produces that form; complicating the parser for a case
-        # nobody hits invites bugs.
-        self.set_arg("path", path_parts[0])
+        self.set_arg("path", " ".join(path_parts))
         if recursive:
             self.set_arg("recursive", True)
         if confirm:

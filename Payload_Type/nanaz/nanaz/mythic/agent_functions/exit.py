@@ -39,12 +39,13 @@ class ExitCommand(CommandBase):
     author = "@zumpyx"
     argument_class = ExitArguments
     attackmapping = ["T1029"]
+    supported_ui_features = ["callback_table:exit"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
-        builtin=False,
+        builtin=True,
         load_only=False,
-        suggested_command=False,
+        suggested_command=True,
     )
 
     async def create_go_tasking(

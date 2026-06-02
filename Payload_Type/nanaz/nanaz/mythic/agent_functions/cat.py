@@ -26,6 +26,7 @@ class CatCommand(CommandBase):
     author = "@zumpyx"
     argument_class = CatArguments
     attackmapping = ["T1005"]
+    supported_ui_features = ["cat"]
     attributes = simple_command_attributes()
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:

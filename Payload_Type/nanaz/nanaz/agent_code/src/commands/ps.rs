@@ -12,9 +12,12 @@
 
 use mythic::{ProcessEntry, TaskMessage, TaskResponse};
 use serde::Deserialize;
+#[cfg(windows)]
+use serde_json::Value;
 
 #[allow(unused_imports)]
 use crate::sys::encoding::decode_output;
+use crate::sys::metadata;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -23,6 +26,12 @@ use crate::sys::encoding::decode_output;
 /// well-defined (empty) schema to validate against.
 #[derive(Deserialize, Default)]
 struct Params {}
+
+fn process_host() -> String {
+    metadata::hostname()
+        .map(|h| h.to_uppercase())
+        .unwrap_or_default()
+}
 
 /// Linux `USER_HZ` — the kernel's clock-tick rate. Defaults to 100, but
 /// Docker-on-Mac hosts, some embedded kernels, and tickless configs use
@@ -47,6 +56,7 @@ fn clock_ticks_per_second() -> u64 {
 fn list_processes() -> Result<Vec<ProcessEntry>, String> {
     let mut procs: Vec<ProcessEntry> = Vec::new();
     let hz = clock_ticks_per_second();
+    let host = process_host();
 
     let dir = std::fs::read_dir("/proc").map_err(|e| format!("read /proc: {e}"))?;
 
@@ -71,7 +81,11 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
 
         // Parse stat: pid (name) state ppid ...
         let comm_end = stat.rfind(')').unwrap_or(0);
-        let rest = if comm_end + 1 < stat.len() { &stat[comm_end + 2..] } else { "" };
+        let rest = if comm_end + 1 < stat.len() {
+            &stat[comm_end + 2..]
+        } else {
+            ""
+        };
         let fields: Vec<&str> = rest.split_whitespace().collect();
 
         let ppid: Option<i64> = fields.first().and_then(|s| s.parse().ok());
@@ -126,7 +140,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
         procs.push(ProcessEntry {
             process_id: pid,
             name: proc_name,
-            host: String::new(),
+            host: host.clone(),
             parent_process_id: ppid,
             architecture: Some(std::env::consts::ARCH.into()),
             bin_path,
@@ -151,6 +165,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
 
     let stdout = decode_output(&output.stdout);
     let mut procs: Vec<ProcessEntry> = Vec::new();
+    let host = process_host();
 
     for line in stdout.lines().skip(1) {
         let parts: Vec<&str> = line.splitn(5, |c: char| c.is_whitespace()).collect();
@@ -169,7 +184,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
         procs.push(ProcessEntry {
             process_id: pid,
             name,
-            host: String::new(),
+            host: host.clone(),
             parent_process_id: ppid,
             architecture: Some(std::env::consts::ARCH.into()),
             user: Some(user),
@@ -184,12 +199,128 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
 // ── Windows: use wmic ───────────────────────────────────────
 
 #[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Win32Process {
+    process_id: Option<i64>,
+    parent_process_id: Option<i64>,
+    name: Option<String>,
+    executable_path: Option<String>,
+    command_line: Option<String>,
+}
+
+#[cfg(windows)]
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+#[cfg(windows)]
+fn process_name(
+    name: Option<String>,
+    bin_path: Option<&String>,
+    command_line: Option<&String>,
+) -> String {
+    if let Some(name) = non_empty(name) {
+        return name;
+    }
+    if let Some(path) = bin_path {
+        let normalized = path.replace('\\', "/");
+        if let Some(last) = normalized.rsplit('/').next() {
+            if !last.trim().is_empty() {
+                return last.trim().to_string();
+            }
+        }
+    }
+    if let Some(command_line) = command_line {
+        let first = command_line
+            .trim()
+            .trim_matches('"')
+            .split_whitespace()
+            .next()
+            .unwrap_or("");
+        let normalized = first.replace('\\', "/");
+        if let Some(last) = normalized.rsplit('/').next() {
+            if !last.trim().is_empty() {
+                return last.trim().to_string();
+            }
+        }
+    }
+    "unknown".into()
+}
+
+#[cfg(windows)]
+fn parse_powershell_process_json(stdout: &str) -> Result<Vec<ProcessEntry>, String> {
+    let value: Value =
+        serde_json::from_str(stdout.trim()).map_err(|e| format!("parse process json: {e}"))?;
+    let values = match value {
+        Value::Array(values) => values,
+        Value::Object(_) => vec![value],
+        Value::Null => Vec::new(),
+        _ => return Err("unexpected process json shape".into()),
+    };
+
+    let mut out = Vec::new();
+    let host = process_host();
+    for value in values {
+        let proc: Win32Process =
+            serde_json::from_value(value).map_err(|e| format!("parse process entry: {e}"))?;
+        let Some(pid) = proc.process_id else {
+            continue;
+        };
+        let bin_path = non_empty(proc.executable_path);
+        let command_line = non_empty(proc.command_line);
+        let name = process_name(proc.name, bin_path.as_ref(), command_line.as_ref());
+
+        out.push(ProcessEntry {
+            process_id: pid,
+            name,
+            host: host.clone(),
+            parent_process_id: proc.parent_process_id,
+            architecture: Some(std::env::consts::ARCH.into()),
+            bin_path,
+            command_line,
+            ..Default::default()
+        });
+    }
+    Ok(out)
+}
+
+#[cfg(windows)]
 fn list_processes() -> Result<Vec<ProcessEntry>, String> {
+    let ps_script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress";
+    if let Ok(output) = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ps_script,
+        ])
+        .output()
+    {
+        let stdout = decode_output(&output.stdout);
+        if output.status.success() && !stdout.trim().is_empty() {
+            if let Ok(processes) = parse_powershell_process_json(&stdout) {
+                if !processes.is_empty() {
+                    return Ok(processes);
+                }
+            }
+        }
+    }
+
     let output = std::process::Command::new("wmic")
         .args([
             "process",
             "get",
-            "ProcessId,ParentProcessId,Name,CommandLine",
+            "ExecutablePath,Name,ParentProcessId,ProcessId",
             "/format:csv",
         ])
         .output()
@@ -203,6 +334,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
 
     let stdout = decode_output(&output.stdout);
     let mut procs: Vec<ProcessEntry> = Vec::new();
+    let host = process_host();
 
     for line in stdout.lines().skip(1) {
         let line = line.trim();
@@ -210,27 +342,32 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
             continue;
         }
 
-        // CSV format: Node,ProcessId,ParentProcessId,Name,CommandLine
+        // CSV format is normally Node,ExecutablePath,Name,ParentProcessId,ProcessId.
+        // Avoid CommandLine here because commas in arguments break wmic CSV parsing.
         let parts: Vec<&str> = line.split(',').collect();
-        if parts.len() < 4 {
+        if parts.len() < 5 {
             continue;
         }
 
-        let pid: i64 = match parts[1].trim_matches('"').parse() {
+        let pid: i64 = match parts[4].trim_matches('"').parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
-        let ppid: Option<i64> = parts[2].trim_matches('"').parse().ok();
-        let name = parts[3].trim_matches('"').to_string();
-        let cmdline = parts.get(4).map(|s| s.trim_matches('"').to_string());
+        let ppid: Option<i64> = parts[3].trim_matches('"').parse().ok();
+        let bin_path = non_empty(Some(parts[1].trim_matches('"').to_string()));
+        let name = process_name(
+            Some(parts[2].trim_matches('"').to_string()),
+            bin_path.as_ref(),
+            None,
+        );
 
         procs.push(ProcessEntry {
             process_id: pid,
             name,
-            host: String::new(),
+            host: host.clone(),
             parent_process_id: ppid,
             architecture: Some(std::env::consts::ARCH.into()),
-            command_line: cmdline,
+            bin_path,
             ..Default::default()
         });
     }
@@ -252,31 +389,40 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // string parses as an empty object — an operator who types
     // `ps -foo` will get a structured parameter-error response here
     // rather than a successful empty process list.
-    if let Err(e) = serde_json::from_str::<Params>(&task.parameters) {
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    if let Err(e) = serde_json::from_str::<Params>(parameters) {
         return TaskResponse::failed(task.id, &format!("ps parse error: {e}"));
     }
 
     match list_processes() {
         Ok(mut procs) => {
-            // Mark for auto-cleanup on all entries. The `host` field
-            // on each entry is left empty — Mythic fills it from the
-            // callback's host server-side, so we don't need to set it
-            // here (and previously did via a now-removed Params.host
-            // field that the operator never typed anyway).
+            // Mark for auto-cleanup on all entries. Mythic's unified
+            // Process Browser groups rows by host; although the docs say host
+            // is optional, the Rust wire struct serializes it as a string. An
+            // empty string makes the browser associate the rows with an empty
+            // host instead of the callback's host.
             for p in &mut procs {
+                if p.host.trim().is_empty() {
+                    p.host = process_host();
+                }
                 p.update_deleted = true;
             }
 
-            // The `user_output` is intentionally None — the Python
-            // `PsCommand.process_response` formats the structured process
-            // list and writes it via `MythicRPCTaskUpdate`. Writing a
-            // duplicate `{count} processes` summary here would show up as
-            // a second, less-informative output block in the UI.
+            // BrowserScript receives normal response text, not only the
+            // structured `processes` hook. Mirror Apollo by putting the
+            // serialized process array in user_output while also sending
+            // the hook data for Mythic's process browser.
+            let user_output = serde_json::to_string(&procs).unwrap_or_else(|_| "[]".into());
             TaskResponse {
                 task_id: task.id,
                 completed: Some(true),
                 status: Some("completed".into()),
-                user_output: None,
+                user_output: Some(user_output),
                 processes: procs,
                 ..Default::default()
             }
@@ -301,9 +447,22 @@ mod tests {
         let resp = handle(&task);
         assert!(resp.completed == Some(true));
         assert!(!resp.processes.is_empty());
+        assert!(resp.user_output.as_deref().unwrap_or("").starts_with('['));
         // Verify at least our own process appears
         let our_pid = std::process::id() as i64;
         assert!(resp.processes.iter().any(|p| p.process_id == our_pid));
+    }
+
+    #[test]
+    fn test_ps_accepts_empty_parameters() {
+        let task = TaskMessage {
+            command: "ps".into(),
+            parameters: "".into(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(!resp.processes.is_empty());
     }
 
     #[test]
@@ -317,6 +476,7 @@ mod tests {
         for entry in &resp.processes {
             assert!(entry.process_id > 0);
             assert!(!entry.name.is_empty());
+            assert!(!entry.host.is_empty());
         }
     }
 }

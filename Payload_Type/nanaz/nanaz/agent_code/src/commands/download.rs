@@ -34,7 +34,7 @@ use mythic::{TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 use crate::push_extra;
 
 // ── Params ──────────────────────────────────────────────────
@@ -66,40 +66,35 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("download parse error: {e}")),
     };
 
-    if !params.allow_system_path && is_protected_path(&params.path) {
+    let path_str = normalize_user_path(&params.path);
+    if !params.allow_system_path && is_protected_path(&path_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to download system path {}; set allow_system_path=true to override",
-                params.path
+                path_str
             ),
         );
     }
 
-    let path = Path::new(&params.path);
+    let path = Path::new(&path_str);
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".into());
-    let full_path = path.to_string_lossy().to_string();
+    let full_path = display_path(path);
 
     // 1. Open file and get total size
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            return TaskResponse::failed(
-                task.id,
-                &format!("read {} failed: {e}", path.display()),
-            )
+            return TaskResponse::failed(task.id, &format!("read {} failed: {e}", display_path(path)));
         }
     };
     let total_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(e) => {
-            return TaskResponse::failed(
-                task.id,
-                &format!("stat {} failed: {e}", path.display()),
-            )
+            return TaskResponse::failed(task.id, &format!("stat {} failed: {e}", display_path(path)));
         }
     };
     if total_size > MAX_TOTAL_SIZE {
@@ -154,7 +149,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         task.id,
                         &format!(
                             "read {} failed at byte {}/{}: {e}",
-                            path.display(),
+                            display_path(path),
                             bytes_sent + filled as u64,
                             total_size
                         ),
@@ -182,7 +177,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         push_extra(TaskResponse {
             task_id: task.id,
             completed: Some(is_last),
-            status: Some(if is_last { "completed".into() } else { "processing".into() }),
+            status: Some(if is_last {
+                "completed".into()
+            } else {
+                "processing".into()
+            }),
             user_output: None,
             download: Some(TaskDownload {
                 total_chunks: Some(total_chunks),
@@ -207,9 +206,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         status: Some("completed".into()),
         user_output: Some(format!(
             "{} ({} bytes, {} chunks)",
-            filename,
-            total_size,
-            chunk_num
+            filename, total_size, chunk_num
         )),
         ..Default::default()
     }

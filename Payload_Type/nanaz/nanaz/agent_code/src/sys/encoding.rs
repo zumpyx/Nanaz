@@ -43,7 +43,8 @@ fn decode_with_acp(bytes: &[u8]) -> Option<String> {
     let acp = unsafe { windows_acp::GetACP() };
     // Map common code pages to encoding_rs labels
     let label = code_page_label(acp)?;
-    let (decoded, _encoding, had_errors) = encoding_rs::Encoding::for_label(label.as_bytes())?.decode(bytes);
+    let (decoded, _encoding, had_errors) =
+        encoding_rs::Encoding::for_label(label.as_bytes())?.decode(bytes);
     if had_errors {
         // Fall back to replacement-based decode (returns Option<Cow<str>>)
         encoding_rs::Encoding::for_label(label.as_bytes())?
@@ -58,10 +59,10 @@ fn decode_with_acp(bytes: &[u8]) -> Option<String> {
 #[cfg(windows)]
 fn code_page_label(cp: u32) -> Option<&'static str> {
     match cp {
-        936 => Some("gbk"),        // Chinese Simplified
-        950 => Some("big5"),       // Chinese Traditional
-        932 => Some("shift_jis"),  // Japanese
-        949 => Some("euc-kr"),     // Korean
+        936 => Some("gbk"),           // Chinese Simplified
+        950 => Some("big5"),          // Chinese Traditional
+        932 => Some("shift_jis"),     // Japanese
+        949 => Some("euc-kr"),        // Korean
         1250 => Some("windows-1250"), // Central/Eastern Europe
         1251 => Some("windows-1251"), // Cyrillic
         1252 => Some("windows-1252"), // Western European

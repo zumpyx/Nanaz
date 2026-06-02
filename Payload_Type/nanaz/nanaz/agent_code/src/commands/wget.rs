@@ -12,6 +12,7 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 use crate::sys::network::http_get_to_writer;
+use crate::common::pathguard::{display_path, normalize_user_path};
 
 /// Hard cap on a single wget response. Larger transfers should use a
 /// stager split into multiple wget calls. 256 MiB mirrors `upload`.
@@ -59,7 +60,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         tmp.push(filename_from_url(&params.url));
         tmp
     } else {
-        Path::new(&params.path).to_path_buf()
+        Path::new(&normalize_user_path(&params.path)).to_path_buf()
     };
 
     // Create parent dirs
@@ -68,7 +69,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return TaskResponse::failed(
                     task.id,
-                    &format!("create parent dir {} failed: {e}", parent.display()),
+                    &format!("create parent dir {} failed: {e}", display_path(parent)),
                 );
             }
         }
@@ -79,7 +80,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     //    "shell.exe" lying around.
     let file = match std::fs::File::create(&dest) {
         Ok(f) => f,
-        Err(e) => return TaskResponse::failed(task.id, &format!("create {} failed: {e}", dest.display())),
+        Err(e) => {
+            return TaskResponse::failed(
+                task.id,
+                &format!("create {} failed: {e}", display_path(&dest)),
+            );
+        }
     };
     let mut writer = std::io::BufWriter::new(file);
 
@@ -96,16 +102,13 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => {
             // Best-effort: remove the partial file.
             let _ = std::fs::remove_file(&dest);
-            return TaskResponse::failed(
-                task.id,
-                &format!("download {} failed: {e}", params.url),
-            );
+            return TaskResponse::failed(task.id, &format!("download {} failed: {e}", params.url));
         }
     };
 
     if let Err(e) = std::io::Write::flush(&mut writer) {
         let _ = std::fs::remove_file(&dest);
-        return TaskResponse::failed(task.id, &format!("flush {} failed: {e}", dest.display()));
+        return TaskResponse::failed(task.id, &format!("flush {} failed: {e}", display_path(&dest)));
     }
 
     TaskResponse {
@@ -115,7 +118,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         user_output: Some(format!(
             "downloaded {} → {} ({} bytes)",
             params.url,
-            dest.display(),
+            display_path(&dest),
             n
         )),
         ..Default::default()

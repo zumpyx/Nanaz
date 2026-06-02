@@ -11,12 +11,8 @@ pub struct Config {
 #[derive(Debug)]
 pub enum ConfigError {
     Parse(String),
-    Empty {
-        reason: &'static str,
-    },
-    InvalidPsk {
-        reason: String,
-    },
+    Empty { reason: &'static str },
+    InvalidPsk { reason: String },
 }
 
 impl core::fmt::Display for ConfigError {
@@ -42,10 +38,14 @@ impl Config {
         let parsed: Self =
             serde_json::from_str(config).map_err(|e| ConfigError::Parse(e.to_string()))?;
         if parsed.payload_uuid.is_nil() {
-            return Err(ConfigError::Empty { reason: "payload_uuid is nil" });
+            return Err(ConfigError::Empty {
+                reason: "payload_uuid is nil",
+            });
         }
         if parsed.c2_profiles.is_empty() {
-            return Err(ConfigError::Empty { reason: "no c2_profiles configured" });
+            return Err(ConfigError::Empty {
+                reason: "no c2_profiles configured",
+            });
         }
         // PSK validation. Mythic generates a 32-byte base64 AES key per
         // payload; rejecting malformed keys at load time means a typo

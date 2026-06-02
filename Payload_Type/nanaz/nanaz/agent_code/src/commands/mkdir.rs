@@ -12,7 +12,7 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
@@ -28,26 +28,27 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("mkdir parse error: {e}")),
     };
 
-    if !params.allow_system_path && is_protected_path(&params.path) {
+    let path_str = normalize_user_path(&params.path);
+    if !params.allow_system_path && is_protected_path(&path_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to mkdir under system path {}; set allow_system_path=true to override",
-                params.path
+                path_str
             ),
         );
     }
 
-    let path = Path::new(&params.path);
+    let path = Path::new(&path_str);
     match std::fs::create_dir_all(path) {
         Ok(_) => TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(format!("created directory {}", path.display())),
+            user_output: Some(format!("created directory {}", display_path(path))),
             ..Default::default()
         },
-        Err(e) => TaskResponse::failed(task.id, &format!("mkdir {} failed: {e}", path.display())),
+        Err(e) => TaskResponse::failed(task.id, &format!("mkdir {} failed: {e}", display_path(path))),
     }
 }
 

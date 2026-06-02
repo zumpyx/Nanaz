@@ -82,17 +82,33 @@ function(task, responses) {
         return {startIcon: "openFolder", startIconColor: "rgb(241,226,0)"};
     }
 
+    function isAbsolutePath(path) {
+        return path && (
+            path.startsWith("/") ||
+            path.startsWith("\\\\") ||
+            /^[A-Za-z]:[\\/]/.test(path) ||
+            /^[A-Za-z]:$/.test(path)
+        );
+    }
+
+    function pathSeparator(parent) {
+        if (!parent) return "/";
+        if (parent.includes("\\") || /^[A-Za-z]:/.test(parent)) return "\\";
+        return "/";
+    }
+
     function buildFullPath(parent, name) {
-        if (!parent) return name;
+        if (!parent) return name || "";
+        if (!name) return parent;
+        if (isAbsolutePath(name)) return name;
         if (parent.endsWith("/") || parent.endsWith("\\")) return parent + name;
-        return parent + "/" + name;
+        return parent + pathSeparator(parent) + name;
     }
 
     // Per-row actions menu.
     function actionsFor(data, entry) {
-        const fullName = entry["full_name"] || buildFullPath(
-            data["parent_path"] || "", data["name"] ? data["name"] : entry["name"]
-        );
+        const fullName = entry["full_name"] || buildFullPath(data["parent_path"] || "", entry["name"]);
+        const host = data["host"] || entry["host"] || "";
         if (entry["is_file"]) {
             return {
                 name: "Actions",
@@ -102,14 +118,14 @@ function(task, responses) {
                         name: "View",
                         type: "task",
                         ui_feature: "cat",
-                        parameters: {host: data["host"], full_path: fullName},
+                        parameters: {host: host, full_path: fullName},
                     },
                     {
                         name: "Download",
                         type: "task",
                         ui_feature: "file_browser:download",
                         startIcon: "download",
-                        parameters: {host: data["host"], full_path: fullName},
+                        parameters: {host: host, full_path: fullName},
                     },
                     {
                         name: "Delete",
@@ -117,7 +133,7 @@ function(task, responses) {
                         ui_feature: "file_browser:remove",
                         startIcon: "delete",
                         getConfirmation: true,
-                        parameters: {host: data["host"], full_path: fullName},
+                        parameters: {host: host, full_path: fullName},
                     },
                 ],
             };
@@ -131,7 +147,7 @@ function(task, responses) {
                     type: "task",
                     ui_feature: "file_browser:list",
                     startIcon: "list",
-                    parameters: {host: data["host"], full_path: fullName},
+                    parameters: {host: host, full_path: fullName},
                 },
                 {
                     name: "Delete",
@@ -139,7 +155,7 @@ function(task, responses) {
                     ui_feature: "file_browser:remove",
                     startIcon: "delete",
                     getConfirmation: true,
-                    parameters: {host: data["host"], full_path: fullName},
+                    parameters: {host: host, full_path: fullName},
                 },
             ],
         };
@@ -147,9 +163,6 @@ function(task, responses) {
 
     function makeRow(data, entry) {
         const styling = lookupEntryStyling(entry);
-        const fullName = entry["full_name"] || buildFullPath(
-            data["parent_path"] || "", data["name"] ? data["name"] : entry["name"]
-        );
         return {
             name: {
                 plaintext: entry["name"],

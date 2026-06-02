@@ -35,7 +35,7 @@ class ResolveCommand(CommandBase):
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
-        suggested_command=False,
+        suggested_command=True,
     )
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:

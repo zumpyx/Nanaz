@@ -15,11 +15,13 @@ issuing `ls` on a new path. CLI / typed `cd` goes through
 
 from mythic_container.MythicCommandBase import (
     CommandBase,
+    CommandAttributes,
     CommandParameter,
     ParameterType,
     PTTaskCreateTaskingMessageResponse,
     PTTaskMessageAllData,
     PTTaskProcessResponseMessageResponse,
+    SupportedOS,
     TaskArguments,
 )
 from mythic_container.MythicGoRPC.send_mythic_rpc_callback_update import (
@@ -45,6 +47,15 @@ class CdArguments(TaskArguments):
             ),
         ]
 
+    async def parse_dictionary(self, dictionary_arguments):
+        self.load_args_from_dictionary(dictionary_arguments)
+
+    async def parse_arguments(self):
+        path = self.command_line.strip()
+        if not path:
+            raise Exception("cd requires a path")
+        self.set_arg("path", path.strip("\"'"))
+
 
 class CdCommand(CommandBase):
     cmd = "cd"
@@ -64,7 +75,7 @@ class CdCommand(CommandBase):
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
-        suggested_command=False,
+        suggested_command=True,
     )
 
     async def create_go_tasking(
@@ -106,7 +117,7 @@ class CdCommand(CommandBase):
         if cwd:
             await SendMythicRPCCallbackUpdate(
                 MythicRPCCallbackUpdateMessage(
-                    CallbackID=task.callback.id,
+                    CallbackID=task.Callback.ID,
                     Cwd=str(cwd),
                 )
             )

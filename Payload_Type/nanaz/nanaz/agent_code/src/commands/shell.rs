@@ -26,7 +26,11 @@ struct Params {
 }
 
 fn default_shell() -> String {
-    if cfg!(windows) { "cmd".into() } else { "sh".into() }
+    if cfg!(windows) {
+        "cmd".into()
+    } else {
+        "sh".into()
+    }
 }
 
 const fn default_timeout() -> u64 {
@@ -63,9 +67,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             other => {
                 return TaskResponse::failed(
                     task.id,
-                    &format!(
-                        "shell '{other}' is not available on this OS; use 'bash' or 'sh'"
-                    ),
+                    &format!("shell '{other}' is not available on this OS; use 'bash' or 'sh'"),
                 );
             }
         }

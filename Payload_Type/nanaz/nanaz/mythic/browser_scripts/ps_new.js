@@ -55,6 +55,8 @@ function(task, responses) {
                                     "Process Path": p["bin_path"] || "",
                                     "Command Line": p["command_line"] || "",
                                     "User": p["user"] || "",
+                                    "Session": p["session_id"] || p["session"] || "",
+                                    "Signer": p["signer"] || p["company_name"] || "",
                                     "Parent PID": p["parent_process_id"] || "",
                                 },
                                 leftColumnTitle: "Attribute",

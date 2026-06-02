@@ -32,7 +32,7 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
@@ -51,17 +51,18 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("cd parse error: {e}")),
     };
 
-    if !params.allow_system_path && is_protected_path(&params.path) {
+    let path_str = normalize_user_path(&params.path);
+    if !params.allow_system_path && is_protected_path(&path_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to cd into system path {}; set allow_system_path=true to override",
-                params.path
+                path_str
             ),
         );
     }
 
-    let path = Path::new(&params.path);
+    let path = Path::new(&path_str);
 
     // Validate up front: cd to a missing path leaves the old cwd
     // intact (POSIX behaviour) and the error should be loud, not a
@@ -71,15 +72,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("cd: cannot access {}: {e}", path.display()),
-            )
+                &format!("cd: cannot access {}: {e}", display_path(path)),
+            );
         }
     };
     if !meta.is_dir() {
-        return TaskResponse::failed(
-            task.id,
-            &format!("cd: not a directory: {}", path.display()),
-        );
+        return TaskResponse::failed(task.id, &format!("cd: not a directory: {}", display_path(path)));
     }
 
     let canonical = match std::fs::canonicalize(path) {
@@ -87,16 +85,22 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("cd: canonicalize {} failed: {e}", path.display()),
-            )
+                &format!("cd: canonicalize {} failed: {e}", display_path(path)),
+            );
         }
     };
+    if let Err(e) = std::env::set_current_dir(&canonical) {
+        return TaskResponse::failed(
+            task.id,
+            &format!("cd: set_current_dir {} failed: {e}", display_path(&canonical)),
+        );
+    }
 
     // The structured payload is the contract: Mythic's Python wrapper
     // mirrors it into the callback's persistent state via
     // `updatecwd`. The plain `user_output` line is what the operator
     // sees in the tasking panel.
-    let display = canonical.to_string_lossy().to_string();
+    let display = display_path(&canonical);
     TaskResponse {
         task_id: task.id,
         completed: Some(true),
@@ -124,6 +128,7 @@ mod tests {
 
     #[test]
     fn test_cd_into_existing_dir() {
+        let old_cwd = std::env::current_dir().unwrap();
         let dir = unique_tmp("ok");
         let task = TaskMessage {
             command: "cd".into(),
@@ -133,7 +138,11 @@ mod tests {
         let resp = handle(&task);
         assert_eq!(resp.status.as_deref(), Some("completed"));
         let pr = resp.process_response.expect("process_response set");
-        assert_eq!(pr["cwd"].as_str().unwrap(), dir.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(
+            pr["cwd"].as_str().unwrap(),
+            dir.canonicalize().unwrap().to_string_lossy()
+        );
+        std::env::set_current_dir(old_cwd).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

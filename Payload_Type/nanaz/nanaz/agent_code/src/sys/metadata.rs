@@ -67,7 +67,11 @@ pub fn process_name() -> Option<String> {
     // return a constant cover name. Override at compile time by setting
     // NANAZ_PROCESS_NAME (e.g. cargo build --release --config
     // 'env.NANAZ_PROCESS_NAME="svchost.exe"').
-    Some(option_env!("NANAZ_PROCESS_NAME").unwrap_or("nanaz").to_string())
+    Some(
+        option_env!("NANAZ_PROCESS_NAME")
+            .unwrap_or("nanaz")
+            .to_string(),
+    )
 }
 
 pub fn local_ips() -> Vec<String> {
@@ -119,17 +123,10 @@ pub fn external_ip() -> Option<String> {
     if !EXTERNAL_IP_CHECK.load(Ordering::Acquire) {
         return None;
     }
-    crate::sys::network::http_request(
-        "https://api.ipify.org",
-        "GET",
-        None,
-        None,
-        None,
-        true,
-    )
-    .ok()
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
+    crate::sys::network::http_request("https://api.ipify.org", "GET", None, None, None, true)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Enumerate local IPv4 / IPv6 unicast addresses via the Iphlpapi
@@ -139,8 +136,8 @@ pub fn external_ip() -> Option<String> {
 fn windows_local_ips_via_ffi() -> Vec<String> {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH, GAA_FLAG_SKIP_ANYCAST,
-        GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, GAA_FLAG_SKIP_UNICAST,
+        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
+        GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
     };
     use windows_sys::Win32::Networking::WinSock::{
         AF_INET, AF_INET6, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6,
@@ -158,7 +155,8 @@ fn windows_local_ips_via_ffi() -> Vec<String> {
         for _ in 0..3 {
             let rc = GetAdaptersAddresses(
                 FAMILY_FLAGS,
-                GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_UNICAST
+                GAA_FLAG_SKIP_ANYCAST
+                    | GAA_FLAG_SKIP_MULTICAST
                     | GAA_FLAG_SKIP_DNS_SERVER,
                 std::ptr::null(),
                 buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH,
@@ -186,9 +184,7 @@ fn windows_local_ips_via_ffi() -> Vec<String> {
                     AF_INET => {
                         let sa = sockaddr as *const SOCKADDR_IN;
                         let octets = (*sa).sin_addr.S_un.S_addr.to_ne_bytes();
-                        IpAddr::V4(Ipv4Addr::new(
-                            octets[0], octets[1], octets[2], octets[3],
-                        ))
+                        IpAddr::V4(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]))
                     }
                     AF_INET6 => {
                         let sa = sockaddr as *const SOCKADDR_IN6;
@@ -250,8 +246,7 @@ pub fn integrity_level() -> Option<u32> {
         unsafe {
             use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
             use windows_sys::Win32::Security::{
-                GetTokenInformation, TokenIntegrityLevel, TOKEN_MANDATORY_LABEL,
-                TOKEN_QUERY,
+                GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
             };
             use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 

@@ -1,6 +1,13 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
+from ._base import (
+    FileBrowserArguments,
+    error_aware_process_response,
+    simple_command_attributes,
+    split_cli_preserve_backslashes,
+)
 
 
 class CpArguments(FileBrowserArguments):
@@ -18,11 +25,20 @@ class CpArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        # shlex handles quoted paths so operators can type
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+            except json.JSONDecodeError as e:
+                raise Exception(f"cp: invalid JSON: {e}")
+            if not data.get("src") or not data.get("dst"):
+                raise Exception("cp JSON requires 'src' and 'dst'.")
+            self.set_arg("src", data["src"])
+            self.set_arg("dst", data["dst"])
+            return
+        # Preserve Windows backslashes while still allowing quoted paths:
         # cp "/path with space/a.txt" "/path with space/b.txt" from the CLI.
-        import shlex
         try:
-            parts = shlex.split(cl)
+            parts = split_cli_preserve_backslashes(cl)
         except ValueError as e:
             raise Exception(f"cp: failed to parse command line: {e}")
         if len(parts) < 2:

@@ -122,6 +122,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             &format!("invalid pid {} (must be > 0)", params.pid),
         );
     }
+    let _ = params.force;
 
     // PROCESS_TERMINATE (0x0001) is the minimum privilege needed.
     // We don't request PROCESS_QUERY_INFORMATION or any of the
@@ -151,9 +152,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // distinguish "exited cleanly" from "killed".
     //
     // SAFETY: handle is a valid open process; exit code is a DWORD.
-    let term_result = unsafe {
-        windows_sys::Win32::System::Threading::TerminateProcess(handle, 1)
-    };
+    let term_result = unsafe { windows_sys::Win32::System::Threading::TerminateProcess(handle, 1) };
     // Always close the handle — leaking it would prevent the OS from
     // fully reaping the process object.
     unsafe {

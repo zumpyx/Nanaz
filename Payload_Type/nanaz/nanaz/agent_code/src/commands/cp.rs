@@ -10,7 +10,7 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
@@ -34,12 +34,15 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     // Dst side — refuse to write into protected trees.
-    if !params.allow_system_path && is_protected_path(&params.dst) {
+    let src_str = normalize_user_path(&params.src);
+    let dst_str = normalize_user_path(&params.dst);
+
+    if !params.allow_system_path && is_protected_path(&dst_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to write to system path {}; set allow_system_path=true to override",
-                params.dst
+                dst_str
             ),
         );
     }
@@ -47,18 +50,18 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // explicitly opted in. The two flags are independent so the
     // operator can copy a system file out (read-ok, write-not-ok)
     // without opening the bidirectional back door.
-    if !params.allow_source_system_path && is_protected_path(&params.src) {
+    if !params.allow_source_system_path && is_protected_path(&src_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to read from system path {}; set allow_source_system_path=true to override",
-                params.src
+                src_str
             ),
         );
     }
 
-    let src = Path::new(&params.src);
-    let dst = Path::new(&params.dst);
+    let src = Path::new(&src_str);
+    let dst = Path::new(&dst_str);
 
     // If dst is a directory, copy into it with the same filename
     let actual_dst = if dst.is_dir() {
@@ -77,9 +80,21 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(format!("copied {} → {} ({} bytes)", src.display(), actual_dst.display(), n)),
+            user_output: Some(format!(
+                "copied {} → {} ({} bytes)",
+                display_path(src),
+                display_path(&actual_dst),
+                n
+            )),
             ..Default::default()
         },
-        Err(e) => TaskResponse::failed(task.id, &format!("copy {} → {} failed: {e}", src.display(), actual_dst.display())),
+        Err(e) => TaskResponse::failed(
+            task.id,
+            &format!(
+                "copy {} → {} failed: {e}",
+                display_path(src),
+                display_path(&actual_dst)
+            ),
+        ),
     }
 }

@@ -12,7 +12,7 @@ use std::path::Path;
 use mythic::{RemovedFileInfo, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
@@ -34,13 +34,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("rm parse error: {e}")),
     };
 
-    let is_system = is_protected_path(&params.path);
+    let path_str = normalize_user_path(&params.path);
+    let is_system = is_protected_path(&path_str);
     if is_system && !params.allow_system_path {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to remove system path {}; set allow_system_path=true to override",
-                params.path
+                path_str
             ),
         );
     }
@@ -51,7 +52,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         );
     }
 
-    let path = Path::new(&params.path);
+    let path = Path::new(&path_str);
     match std::fs::metadata(path) {
         Ok(meta) => {
             let result = if meta.is_dir() {
@@ -60,7 +61,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 } else {
                     return TaskResponse::failed(
                         task.id,
-                        &format!("{} is a directory; use recursive=true", path.display()),
+                        &format!("{} is a directory; use recursive=true", display_path(path)),
                     );
                 }
             } else {
@@ -72,19 +73,19 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     task_id: task.id,
                     completed: Some(true),
                     status: Some("completed".into()),
-                    user_output: Some(format!("removed {}", path.display())),
+                    user_output: Some(format!("removed {}", display_path(path))),
                     removed_files: vec![RemovedFileInfo {
                         host: String::new(),
-                        path: params.path.clone(),
+                        path: display_path(path),
                     }],
                     ..Default::default()
                 },
                 Err(e) => {
-                    TaskResponse::failed(task.id, &format!("remove {} failed: {e}", path.display()))
+                    TaskResponse::failed(task.id, &format!("remove {} failed: {e}", display_path(path)))
                 }
             }
         }
-        Err(e) => TaskResponse::failed(task.id, &format!("{}: {e}", path.display())),
+        Err(e) => TaskResponse::failed(task.id, &format!("{}: {e}", display_path(path))),
     }
 }
 

@@ -74,6 +74,8 @@ fn main() {
         // and a re-run with the same content would be a no-op.
         std::fs::write(cfg, PLACEHOLDER)
             .unwrap_or_else(|e| panic!("build.rs: failed to write placeholder config.json: {e}"));
-        println!("cargo:warning=wrote placeholder config.json — replace via Mythic builder before deploying");
+        println!(
+            "cargo:warning=wrote placeholder config.json — replace via Mythic builder before deploying"
+        );
     }
 }

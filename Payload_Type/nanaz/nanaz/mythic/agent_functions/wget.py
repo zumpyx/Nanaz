@@ -1,6 +1,8 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, simple_command_attributes
+from ._base import FileBrowserArguments, simple_command_attributes, split_cli_preserve_backslashes
 
 
 class WgetArguments(FileBrowserArguments):
@@ -26,11 +28,21 @@ class WgetArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        # shlex so operators can quote either the URL (rare) or the
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+            except json.JSONDecodeError as e:
+                raise Exception(f"wget: invalid JSON: {e}")
+            if not data.get("url"):
+                raise Exception("wget JSON requires 'url'.")
+            self.set_arg("url", data["url"])
+            if data.get("path"):
+                self.set_arg("path", data["path"])
+            return
+        # Preserve Windows backslashes while still allowing quotes around the
         # destination path (common — operators often type "/tmp/My Drop/x").
-        import shlex
         try:
-            parts = shlex.split(cl)
+            parts = split_cli_preserve_backslashes(cl)
         except ValueError as e:
             raise Exception(f"wget: failed to parse command line: {e}")
         self.set_arg("url", parts[0])

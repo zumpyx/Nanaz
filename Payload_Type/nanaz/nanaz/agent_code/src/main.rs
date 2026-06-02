@@ -142,6 +142,9 @@ fn main() {
 /// Windows release builds set `windows_subsystem = "windows"` and so have
 /// no console attached at all — the file path is the only trace.
 fn report_fatal(msg: &str) {
+    #[cfg(not(any(debug_assertions, unix)))]
+    let _ = msg;
+
     #[cfg(debug_assertions)]
     {
         eprintln!("{msg}");

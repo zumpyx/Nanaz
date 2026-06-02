@@ -44,8 +44,7 @@ fn hex_to_ipv6(s: &str) -> String {
     // Format as compressed IPv6
     format!(
         "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
-        groups[0], groups[1], groups[2], groups[3],
-        groups[4], groups[5], groups[6], groups[7],
+        groups[0], groups[1], groups[2], groups[3], groups[4], groups[5], groups[6], groups[7],
     )
 }
 
@@ -142,7 +141,11 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
     let output = std::process::Command::new("netstat")
         .args(["-an", "-W", "-p", "tcp,udp"])
         .output()
-        .or_else(|_| std::process::Command::new("lsof").args(["-i", "-n", "-P"]).output())
+        .or_else(|_| {
+            std::process::Command::new("lsof")
+                .args(["-i", "-n", "-P"])
+                .output()
+        })
         .map_err(|e| format!("netstat/lsof failed: {e}"))?;
 
     let stdout = decode_output(&output.stdout);
@@ -276,7 +279,10 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
                 let (state, pid) = if proto.starts_with("udp") {
                     // No state column. The PID is the last token, which is
                     // parts[3] when there are exactly 4 columns.
-                    ("NONE".to_string(), parts.last().and_then(|s| s.parse().ok()))
+                    (
+                        "NONE".to_string(),
+                        parts.last().and_then(|s| s.parse().ok()),
+                    )
                 } else {
                     let s = if parts.len() >= 5
                         && parts[3].chars().all(|c| c.is_alphabetic() || c == '_')

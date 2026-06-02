@@ -1,6 +1,13 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
+from ._base import (
+    FileBrowserArguments,
+    error_aware_process_response,
+    simple_command_attributes,
+    split_cli_preserve_backslashes,
+)
 
 
 class MvArguments(FileBrowserArguments):
@@ -18,10 +25,19 @@ class MvArguments(FileBrowserArguments):
         cl = self.command_line.strip()
         if not cl:
             return
-        # shlex so operators can quote paths containing whitespace.
-        import shlex
+        if cl.startswith("{"):
+            try:
+                data = json.loads(cl)
+            except json.JSONDecodeError as e:
+                raise Exception(f"mv: invalid JSON: {e}")
+            if not data.get("src") or not data.get("dst"):
+                raise Exception("mv JSON requires 'src' and 'dst'.")
+            self.set_arg("src", data["src"])
+            self.set_arg("dst", data["dst"])
+            return
+        # Preserve Windows backslashes while still allowing quoted paths.
         try:
-            parts = shlex.split(cl)
+            parts = split_cli_preserve_backslashes(cl)
         except ValueError as e:
             raise Exception(f"mv: failed to parse command line: {e}")
         if len(parts) < 2:

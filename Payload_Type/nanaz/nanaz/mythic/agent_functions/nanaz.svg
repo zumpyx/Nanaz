@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#111726" />
+      <stop offset="100%" stop-color="#070a12" />
+    </radialGradient>
+
+    <linearGradient id="neon-cat-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00ffcc" />
+      <stop offset="50%" stop-color="#00b3ff" />
+      <stop offset="100%" stop-color="#9b51e0" />
+    </linearGradient>
+
+    <filter id="neon-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <rect width="100%" height="100%" fill="url(#bg-grad)" rx="24" />
+
+  <g filter="url(#neon-glow)" opacity="0.4">
+    <path d="M 250,150 L 170,90 L 195,210 L 120,250 L 205,320 L 250,390 L 295,320 L 380,250 L 305,210 L 330,90 Z" 
+          fill="none" stroke="url(#neon-cat-grad)" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M 195,210 L 250,260 L 305,210 M 250,150 L 250,260 M 250,300 L 250,340" 
+          fill="none" stroke="url(#neon-cat-grad)" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <path d="M 250,150 L 170,90 L 195,210 L 120,250 L 205,320 L 250,390 L 295,320 L 380,250 L 305,210 L 330,90 Z" 
+        fill="none" stroke="url(#neon-cat-grad)" stroke-width="4" stroke-linejoin="round"/>
+
+  <path d="M 195,210 L 250,260 L 305,210" fill="none" stroke="url(#neon-cat-grad)" stroke-width="3" stroke-linejoin="round" opacity="0.8"/>
+  <path d="M 250,150 L 250,260" fill="none" stroke="url(#neon-cat-grad)" stroke-width="2" opacity="0.7"/>
+  <path d="M 205,320 L 250,300 L 295,320" fill="none" stroke="url(#neon-cat-grad)" stroke-width="3" stroke-linejoin="round" opacity="0.8"/>
+
+  <polygon points="205,230 235,245 210,255" fill="url(#neon-cat-grad)"/>
+  <polygon points="208,235 230,245 213,251" fill="#ffffff"/>
+  
+  <polygon points="295,230 265,245 290,255" fill="url(#neon-cat-grad)"/>
+  <polygon points="292,235 270,245 287,251" fill="#ffffff"/>
+
+  <polygon points="250,290 242,278 258,278" fill="#00ffcc" filter="url(#neon-glow)"/>
+
+</svg>

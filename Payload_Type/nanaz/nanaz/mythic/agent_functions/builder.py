@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 import pathlib
+import shutil
 import traceback
 
 from mythic_container.MythicCommandBase import *
@@ -19,6 +21,39 @@ TARGETS = {
 AGENT_CODE_PATH = (
     pathlib.Path(__file__).resolve().parent.parent.parent / "agent_code"
 )
+
+TOOL_DIRS = [
+    pathlib.Path("/root/.cargo/bin"),
+    pathlib.Path("/usr/local/cargo/bin"),
+    pathlib.Path("/usr/local/bin"),
+    pathlib.Path("/usr/bin"),
+    pathlib.Path("/bin"),
+]
+
+
+def _resolve_tool(name: str) -> str:
+    """Resolve build tools inside Mythic containers without hardcoding one image."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in TOOL_DIRS:
+        candidate = directory / name
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    searched = os.environ.get("PATH", "")
+    extra = ":".join(str(path) for path in TOOL_DIRS)
+    raise FileNotFoundError(
+        f"required build tool '{name}' not found; searched PATH={searched} and {extra}"
+    )
+
+
+def _build_env() -> dict:
+    env = os.environ.copy()
+    path_entries = [str(path) for path in TOOL_DIRS]
+    if env.get("PATH"):
+        path_entries.append(env["PATH"])
+    env["PATH"] = os.pathsep.join(dict.fromkeys(path_entries))
+    return env
 
 
 def _read_cargo_semver() -> str:
@@ -83,6 +118,8 @@ class Nanaz(PayloadType):
         ),
     ]
 
+    agent_path = pathlib.Path(".") / "nanaz" / "mythic"
+    agent_icon_path = agent_path / "agent_functions" / "nanaz.svg"
     agent_code_path = AGENT_CODE_PATH
 
     async def build(self) -> BuildResponse:
@@ -117,14 +154,17 @@ class Nanaz(PayloadType):
 
             # --- compile ---
             triple = TARGETS[target_os]
+            cargo = _resolve_tool("cargo")
+            _resolve_tool("cargo-zigbuild")
             cargo_args = ["zigbuild", "--target", triple]
             if not debug:
                 cargo_args.insert(1, "-r")
 
             proc = await asyncio.create_subprocess_exec(
-                "/usr/local/cargo/bin/cargo",
+                cargo,
                 *cargo_args,
                 cwd=str(self.agent_code_path),
+                env=_build_env(),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )

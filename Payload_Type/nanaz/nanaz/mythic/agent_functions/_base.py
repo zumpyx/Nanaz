@@ -9,6 +9,7 @@ define their own CommandParameter list and create_go_tasking. They just
 inherit the parse_dictionary / parse_arguments boilerplate.
 """
 import json
+import shlex
 from typing import Any, Dict
 
 from mythic_container.MythicCommandBase import (
@@ -36,15 +37,31 @@ class FileBrowserArguments(TaskArguments):
     async def parse_dictionary(self, dictionary_arguments: Dict[str, Any]) -> None:
         """Mythic UI file-browser sends {host, path, file, full_path}.
 
-        Prefer full_path (matches what the user clicked) and pass host through
-        only when non-empty.
+        Prefer full_path (matches what the user clicked). `host` is UI
+        metadata, not an agent parameter for nanaz's Rust commands: unlike
+        Apollo's C# agent, nanaz does not reconstruct remote paths from
+        {host, path}. Keep the clicked path intact and do not add host to the
+        task payload.
         """
-        if "host" in dictionary_arguments and dictionary_arguments.get("full_path"):
-            self.set_arg("path", dictionary_arguments["full_path"])
-            if dictionary_arguments.get("host"):
-                self.set_arg("host", dictionary_arguments["host"])
-            return
-        self.load_args_from_dictionary(dictionary_arguments)
+        arg_names = {arg.name for arg in self.args}
+        clean_args = {
+            k: v
+            for k, v in dictionary_arguments.items()
+            if k in arg_names and k not in ("host", "full_path")
+        }
+
+        if dictionary_arguments.get("full_path") and "path" in arg_names:
+            clean_args["path"] = dictionary_arguments["full_path"]
+        elif dictionary_arguments.get("path") is not None and "path" in arg_names:
+            clean_args["path"] = dictionary_arguments["path"]
+        elif (
+            dictionary_arguments.get("file") is not None
+            and "path" in arg_names
+            and "file" not in arg_names
+        ):
+            clean_args["path"] = dictionary_arguments["file"]
+
+        self.load_args_from_dictionary(clean_args)
 
     async def parse_arguments(self) -> None:
         """CLI form: either a single path string, or a JSON object."""
@@ -56,21 +73,31 @@ class FileBrowserArguments(TaskArguments):
         if cl.startswith("{"):
             try:
                 data = json.loads(cl)
-                if data.get("full_path"):
-                    self.set_arg("path", data["full_path"])
-                    if data.get("host"):
-                        self.set_arg("host", data["host"])
-                    return
-                if "path" in data:
-                    self.set_arg("path", data["path"])
-                    return
+                arg_names = {arg.name for arg in self.args}
+                clean_args = {
+                    k: v
+                    for k, v in data.items()
+                    if k in arg_names and k not in ("host", "full_path")
+                }
+                if data.get("full_path") and "path" in arg_names:
+                    clean_args["path"] = data["full_path"]
+                elif "path" in data and "path" in arg_names:
+                    clean_args["path"] = data["path"]
+                elif "file" in data and "path" in arg_names and "file" not in arg_names:
+                    clean_args["path"] = data["file"]
+                self.load_args_from_dictionary(clean_args)
+                return
             except json.JSONDecodeError:
                 pass
         if self.cli_takes_path:
             self.set_arg("path", cl)
 
 
-def simple_command_attributes(supported_os=None, builtin: bool = False) -> CommandAttributes:
+def simple_command_attributes(
+    supported_os=None,
+    builtin: bool = False,
+    suggested_command: bool = True,
+) -> CommandAttributes:
     """Default attributes used by every nanaz command."""
     if supported_os is None:
         supported_os = [SupportedOS.Windows, SupportedOS.Linux]
@@ -79,8 +106,22 @@ def simple_command_attributes(supported_os=None, builtin: bool = False) -> Comma
         supported_os=supported_os,
         builtin=builtin,
         load_only=False,
-        suggested_command=False,
+        suggested_command=suggested_command,
     )
+
+
+def split_cli_preserve_backslashes(command_line: str) -> list[str]:
+    """Split CLI text without treating Windows backslashes as escapes."""
+    lexer = shlex.shlex(command_line, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return [_strip_outer_quotes(token) for token in lexer]
+
+
+def _strip_outer_quotes(token: str) -> str:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
+        return token[1:-1]
+    return token
 
 
 def error_aware_process_response(

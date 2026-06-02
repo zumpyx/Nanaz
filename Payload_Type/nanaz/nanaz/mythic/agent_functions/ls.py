@@ -3,6 +3,7 @@ from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
     MythicRPCTaskUpdateMessage,
     SendMythicRPCTaskUpdate,
 )
+from ._base import split_cli_preserve_backslashes
 
 from ._base import FileBrowserArguments, simple_command_attributes
 
@@ -18,11 +19,25 @@ class LsArguments(FileBrowserArguments):
                 name="path",
                 type=ParameterType.String,
                 default_value=".",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=1,
+                    )
+                ],
             ),
             CommandParameter(
                 name="recursive",
                 type=ParameterType.Boolean,
                 default_value=False,
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=2,
+                    )
+                ],
             ),
         ]
 
@@ -35,11 +50,18 @@ class LsArguments(FileBrowserArguments):
             return
         path = "."
         recursive = False
-        for part in cl.split():
+        try:
+            parts = split_cli_preserve_backslashes(cl)
+        except ValueError as e:
+            raise Exception(f"ls: failed to parse command line: {e}")
+        path_parts = []
+        for part in parts:
             if part in ("-r", "-R"):
                 recursive = True
             else:
-                path = part
+                path_parts.append(part)
+        if path_parts:
+            path = " ".join(path_parts)
         self.set_arg("path", path)
         self.set_arg("recursive", recursive)
 
@@ -61,9 +83,10 @@ class LsCommand(CommandBase):
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
-        path = taskData.args.get_arg("path")
+        path = taskData.args.get_arg("path") or "."
         rec = taskData.args.get_arg("recursive")
         response.DisplayParams = f"{path}" + (" -r" if rec else "")
+
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
@@ -111,7 +134,8 @@ class LsCommand(CommandBase):
         # Single-file listing: just confirm the path, don't fake a table.
         if fb.get("is_file"):
             size = fb.get("size", 0) or 0
-            output = f"{fb.get('parent_path', '')}/{fb.get('name', '')} ({format_size(size)})"
+            output = join_display(fb.get('parent_path', ''), fb.get('name', ''))
+            output = f"{output} ({format_size(size)})"
             await SendMythicRPCTaskUpdate(
                 MythicRPCTaskUpdateMessage(TaskID=task.Task.ID, UpdateStdout=output)
             )
@@ -119,7 +143,7 @@ class LsCommand(CommandBase):
 
         files = fb.get("files") or []
         if not files:
-            output = f"empty: {fb.get('parent_path', '')}/{fb.get('name', '')}"
+            output = f"empty: {join_display(fb.get('parent_path', ''), fb.get('name', ''))}"
             await SendMythicRPCTaskUpdate(
                 MythicRPCTaskUpdateMessage(TaskID=task.Task.ID, UpdateStdout=output)
             )
@@ -132,7 +156,7 @@ class LsCommand(CommandBase):
             lines.append(
                 f"  {icon}  {f.get('name', ''):<40}  {format_size(sz):>8}"
             )
-        output = f"Listing: {fb.get('parent_path', '')}/{fb.get('name', '')}\n"
+        output = f"Listing: {join_display(fb.get('parent_path', ''), fb.get('name', ''))}\n"
         output += "\n".join(lines)
         output += f"\n── {len(files)} entries ──"
         await SendMythicRPCTaskUpdate(
@@ -150,3 +174,14 @@ def format_size(n: int) -> str:
     if n < 1024 * 1024 * 1024:
         return f"{n // (1024 * 1024)}MB"
     return f"{n // (1024 * 1024 * 1024)}GB"
+
+
+def join_display(parent: str, name: str) -> str:
+    if not parent:
+        return name or ""
+    if not name:
+        return parent
+    sep = "\\" if "\\" in parent or (len(parent) >= 2 and parent[1] == ":") else "/"
+    if parent.endswith(("/", "\\")):
+        return parent + name
+    return parent + sep + name

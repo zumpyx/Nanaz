@@ -64,9 +64,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 ..Default::default()
             }
         }
-        Err(e) => TaskResponse::failed(
-            task.id,
-            &format!("resolve {hostname} failed: {e}"),
-        ),
+        Err(e) => TaskResponse::failed(task.id, &format!("resolve {hostname} failed: {e}")),
     }
 }

@@ -1,25 +1,23 @@
 """pwd — print the agent's current working directory.
 
-Cross-platform. Mythic tracks each callback's `current_working_directory`
-in the callback's persistent state and surfaces it in the UI; this
-command simply returns that value to the operator's task output.
-
-The Rust agent keeps its own cwd in sync with Mythic's state (and emits
-it on every command response), so `pwd` does not need a Rust-side
-handler — it works even on a fresh callback by reading the
-auto-initialised value from `TaskMessage.cwd`.
+Cross-platform. The Rust agent reports its process cwd and includes it
+in `process_response.cwd`; this wrapper mirrors that value into Mythic's
+persistent callback state so the file browser and command output stay
+consistent.
 """
 
 from mythic_container.MythicCommandBase import (
     CommandBase,
+    CommandAttributes,
     PTTaskCreateTaskingMessageResponse,
     PTTaskMessageAllData,
     PTTaskProcessResponseMessageResponse,
+    SupportedOS,
     TaskArguments,
 )
-from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
-    MythicRPCTaskUpdateMessage,
-    SendMythicRPCTaskUpdate,
+from mythic_container.MythicGoRPC.send_mythic_rpc_callback_update import (
+    MythicRPCCallbackUpdateMessage,
+    SendMythicRPCCallbackUpdate,
 )
 
 
@@ -52,7 +50,7 @@ class PwdCommand(CommandBase):
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
-        suggested_command=False,
+        suggested_command=True,
     )
 
     async def create_go_tasking(
@@ -67,21 +65,22 @@ class PwdCommand(CommandBase):
     async def process_response(
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
-        """Format the structured cwd response as a one-line output.
-
-        Mythic tracks the cwd in the callback's persistent state, but
-        that value isn't automatically streamed to the task output —
-        we explicitly write it so the operator sees a clean
-        `pwd → /path/to/dir` line in the tasking panel.
-        """
         resp = PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
         if isinstance(response, dict):
-            cwd = response.get("cwd") or response.get("user_output")
+            if response.get("status") == "error":
+                resp.Success = False
+                resp.Error = response.get("user_output") or "pwd failed"
+                return resp
+            cwd = response.get("cwd")
+            if not cwd:
+                pr = response.get("process_response")
+                if isinstance(pr, dict):
+                    cwd = pr.get("cwd")
             if cwd:
-                await SendMythicRPCTaskUpdate(
-                    MythicRPCTaskUpdateMessage(
-                        TaskID=task.Task.ID,
-                        UpdateStdout=str(cwd).rstrip(),
+                await SendMythicRPCCallbackUpdate(
+                    MythicRPCCallbackUpdateMessage(
+                        CallbackID=task.Callback.ID,
+                        Cwd=str(cwd),
                     )
                 )
         return resp

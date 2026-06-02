@@ -125,16 +125,18 @@ This agent speaks Mythic's `http` C2 profile. The container's
 | Command | Args | Notes |
 |---|---|---|
 | `cat` | `path` | Read file. Cross-platform encoding detection (UTF-8 → Windows ANSI code page fallback). |
-| `cd` / `pwd` | — | *Not implemented* (intentional — Mythic UI handles pwd). |
+| `cd` / `pwd` | `path` / — | Change or print the agent process cwd; mirrors cwd into Mythic callback state. |
 | `cp` | `src dst` | Cross-platform. Auto-creates dst parent. |
 | `download` | `path` | Multi-chunk, streaming. Default 512 KiB chunks (configurable via `chunk_size`). No upper bound on file size. |
 | `env` | `[key]` | List env vars, optionally filtered by substring. |
+| `execute_assembly` / `executeAssembly` | `Assembly.exe [args]` | Windows-only. Execute a .NET assembly in-process via `rustclr`; supports uploaded or registered assemblies. |
 | `exit` | `process` / `thread` | Stop the beacon. `process` flushes pending then exits; `thread` is a legacy alias. |
 | `ls` | `[path] [-r]` | File browser. `~` expansion, recursive mode, dirs first sort. |
 | `mkdir` | `path` | `mkdir -p` semantics. |
 | `mv` | `src dst` | Renames; falls back to copy+delete on `EXDEV` (cross-filesystem). |
 | `netstat` | — | TCP/UDP connection table. Linux: `/proc/net/tcp{,6}` + `udp{,6}`. macOS: `netstat -an -W -p tcp,udp`. Windows: `netstat -ano`. |
 | `ps` | — | Process listing. Linux: `/proc` walk. macOS: `ps`. Windows: `wmic` (with `tasklist` fallback). |
+| `powerpick` / `PowerPick` | `command` | Windows-only. Execute PowerShell in-process via `rustclr` without spawning `powershell.exe`. |
 | `resolve` | `hostname` | DNS resolve. `std::net::ToSocketAddrs`. |
 | `rm` | `path [-r]` | File browser. `recursive=true` for directories; `recursive` requires `confirm_destructive=true` to prevent typos. System paths require `allow_system_path=true`. |
 | `shell` | `command [shell] [timeout]` | Run via `cmd` / `powershell` / `bash` / `sh`. Default timeout 60s. |

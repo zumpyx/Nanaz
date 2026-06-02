@@ -24,7 +24,7 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::is_protected_path;
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 use crate::sys::encoding::decode_output;
 
 /// Default cap (in bytes) on the size of a file `cat` will fully
@@ -56,27 +56,25 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("cat parse error: {e}")),
     };
 
-    if !params.allow_system_path && is_protected_path(&params.path) {
+    let path_str = normalize_user_path(&params.path);
+    if !params.allow_system_path && is_protected_path(&path_str) {
         return TaskResponse::failed(
             task.id,
             &format!(
                 "refusing to read system path {}; set allow_system_path=true to override",
-                params.path
+                path_str
             ),
         );
     }
 
-    let path = Path::new(&params.path);
+    let path = Path::new(&path_str);
 
     // Look up the size up front so we can pick the right path: full
     // read for small files, head+tail window for large.
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            return TaskResponse::failed(
-                task.id,
-                &format!("stat {} failed: {e}", path.display()),
-            )
+            return TaskResponse::failed(task.id, &format!("stat {} failed: {e}", display_path(path)));
         }
     };
     let cap = params
@@ -98,7 +96,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 ..Default::default()
             }
         }
-        Err(e) => TaskResponse::failed(task.id, &format!("read {} failed: {e}", path.display())),
+        Err(e) => TaskResponse::failed(task.id, &format!("read {} failed: {e}", display_path(path))),
     }
 }
 
@@ -110,10 +108,7 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            return TaskResponse::failed(
-                task.id,
-                &format!("open {} failed: {e}", path.display()),
-            )
+            return TaskResponse::failed(task.id, &format!("open {} failed: {e}", display_path(path)));
         }
     };
 
@@ -124,8 +119,8 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("read head of {} failed: {e}", path.display()),
-            )
+                &format!("read head of {} failed: {e}", display_path(path)),
+            );
         }
     };
     head.truncate(head_n);
@@ -138,7 +133,7 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
     if let Err(e) = file.seek(SeekFrom::Start(tail_start)) {
         return TaskResponse::failed(
             task.id,
-            &format!("seek {} to tail failed: {e}", path.display()),
+            &format!("seek {} to tail failed: {e}", display_path(path)),
         );
     }
     let mut tail = vec![0u8; TAIL_BYTES];
@@ -147,8 +142,8 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("read tail of {} failed: {e}", path.display()),
-            )
+                &format!("read tail of {} failed: {e}", display_path(path)),
+            );
         }
     };
     tail.truncate(tail_n);
@@ -198,7 +193,12 @@ mod tests {
         };
         let resp = handle(&task);
         assert_eq!(resp.status.as_deref(), Some("completed"));
-        assert!(resp.user_output.as_deref().unwrap_or("").contains("hello world"));
+        assert!(
+            resp.user_output
+                .as_deref()
+                .unwrap_or("")
+                .contains("hello world")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -22,9 +22,11 @@
 //! doubled output was the most-reported UI bug in the operator chat.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use crate::common::pathguard::{display_path as render_path, normalize_user_path};
+use crate::sys::metadata;
 use mythic::{FileBrowserEntry, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use serde_json::Value;
@@ -33,16 +35,25 @@ use serde_json::Value;
 
 #[derive(Deserialize)]
 struct Params {
+    #[serde(default = "default_path")]
     path: String,
     #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
     recursive: bool,
+}
+
+fn default_path() -> String {
+    ".".into()
 }
 
 // ── Helpers ─────────────────────────────────────────────────
 
 /// Convert `SystemTime` to milliseconds since Unix epoch.
 fn to_millis(t: std::time::SystemTime) -> Option<i64> {
-    t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as i64)
+    t.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
 }
 
 /// Build a `Value` representing Unix-style permissions (or empty on Windows).
@@ -66,13 +77,76 @@ fn permissions_value(_meta: &fs::Metadata) -> Option<Value> {
     None
 }
 
+fn local_host(params: &Params) -> Option<String> {
+    params
+        .host
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(|h| h.to_uppercase())
+        .or_else(|| metadata::hostname().map(|h| h.to_uppercase()))
+}
+
+fn resolve_path(input: &str) -> PathBuf {
+    let normalized = normalize_user_path(input);
+    let trimmed = normalized.trim();
+    let path = if trimmed.is_empty() || trimmed == "." {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            Path::new(&home).join(rest)
+        } else {
+            PathBuf::from(trimmed)
+        }
+    } else if trimmed == "~" {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(trimmed))
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    fs::canonicalize(&path).unwrap_or(path)
+}
+
+fn split_name_parent(path: &Path, original: &str) -> (String, Option<String>) {
+    let parent = path.parent().map(render_path);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| {
+            let shown = render_path(path);
+            if shown.is_empty() {
+                original.to_string()
+            } else {
+                shown
+            }
+        });
+
+    let parent = parent.filter(|p| p != &name);
+    (name, parent)
+}
+
+fn join_display(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        return name.to_string();
+    }
+    let sep = if cfg!(windows) || parent.contains('\\') {
+        "\\"
+    } else {
+        "/"
+    };
+    if parent.ends_with('\\') || parent.ends_with('/') {
+        format!("{parent}{name}")
+    } else {
+        format!("{parent}{sep}{name}")
+    }
+}
+
 // ── Listing helpers ────────────────────────────────────────
 
 /// Build a FileBrowserEntry for a single directory entry.
-fn entry_from_direntry(
-    entry: &fs::DirEntry,
-    path_prefix: &str,
-) -> Option<FileBrowserEntry> {
+fn entry_from_direntry(entry: &fs::DirEntry, path_prefix: &str) -> Option<FileBrowserEntry> {
     let name = entry.file_name().to_string_lossy().to_string();
     let is_file = entry
         .file_type()
@@ -82,7 +156,7 @@ fn entry_from_direntry(
     let display_name = if path_prefix.is_empty() {
         name
     } else {
-        format!("{path_prefix}/{name}")
+        join_display(path_prefix, &name)
     };
     Some(FileBrowserEntry {
         is_file,
@@ -103,8 +177,7 @@ fn entry_from_direntry(
 
 /// Flat listing: immediate children only.
 fn list_dir_flat(dir: &Path) -> Result<Vec<FileBrowserEntry>, String> {
-    let rd = fs::read_dir(dir)
-        .map_err(|e| format!("read_dir {} failed: {e}", dir.display()))?;
+    let rd = fs::read_dir(dir).map_err(|e| format!("read_dir {} failed: {e}", render_path(dir)))?;
     let mut files = Vec::new();
     for entry in rd.flatten() {
         if let Some(fb) = entry_from_direntry(&entry, "") {
@@ -121,19 +194,15 @@ fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
     dirs.push((root.to_path_buf(), String::new()));
 
     while let Some((dir, prefix)) = dirs.pop() {
-        let rd = fs::read_dir(&dir)
-            .map_err(|e| format!("read_dir {} failed: {e}", dir.display()))?;
+        let rd =
+            fs::read_dir(&dir).map_err(|e| format!("read_dir {} failed: {e}", render_path(&dir)))?;
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Some(fb) = entry_from_direntry(&entry, &prefix) {
                 let is_file = fb.is_file;
                 files.push(fb);
                 if !is_file {
-                    let child_prefix = if prefix.is_empty() {
-                        name
-                    } else {
-                        format!("{prefix}/{name}")
-                    };
+                    let child_prefix = join_display(&prefix, &name);
                     dirs.push((entry.path(), child_prefix));
                 }
             }
@@ -151,18 +220,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("ls parse error: {e}")),
     };
 
-    let path = Path::new(&params.path);
-
-    // Resolve ~ to home dir
-    let resolved = if params.path.starts_with('~') {
-        if let Ok(home) = std::env::var("HOME") {
-            Path::new(&home).join(params.path.trim_start_matches("~/"))
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        path.to_path_buf()
-    };
+    let input_path = normalize_user_path(&params.path);
+    let resolved = resolve_path(&input_path);
+    let host = local_host(&params);
+    let (node_name, parent_path) = split_name_parent(&resolved, &input_path);
 
     let meta = match fs::metadata(&resolved) {
         Ok(m) => m,
@@ -171,16 +232,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 task_id: task.id,
                 completed: Some(true),
                 status: Some("error".into()),
-                user_output: Some(format!("cannot access {}: {e}", resolved.display())),
+                user_output: Some(format!("cannot access {}: {e}", render_path(&resolved))),
                 file_browser: Some(FileBrowserEntry {
                     is_file: false,
-                    name: resolved
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| params.path.clone()),
-                    parent_path: resolved
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string()),
+                    name: node_name,
+                    host,
+                    parent_path,
                     success: Some(false),
                     ..Default::default()
                 }),
@@ -199,13 +256,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         // wrapper emit the human-readable line.
         let entry = FileBrowserEntry {
             is_file: true,
-            name: resolved
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| params.path.clone()),
-            parent_path: resolved
-                .parent()
-                .map(|p| p.to_string_lossy().to_string()),
+            name: node_name,
+            host,
+            parent_path,
             size: Some(meta.len() as i64),
             access_time: meta.accessed().ok().and_then(to_millis),
             modify_time: meta.modified().ok().and_then(to_millis),
@@ -236,7 +289,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         // Sort: directories first, then files, both alphabetical
         let mut files = files;
         files.sort_by(|a, b| {
-            b.is_file.cmp(&a.is_file)
+            b.is_file
+                .cmp(&a.is_file)
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
@@ -253,13 +307,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: None,
             file_browser: Some(FileBrowserEntry {
                 is_file: false,
-                name: resolved
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| params.path.clone()),
-                parent_path: resolved
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string()),
+                name: node_name,
+                host,
+                parent_path,
                 success: Some(true),
                 update_deleted: true,
                 files,
@@ -298,16 +348,26 @@ mod tests {
 
         let task = TaskMessage {
             command: "ls".into(),
-            parameters: serde_json::json!({ "path": dir.to_string_lossy() })
-                .to_string(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
             ..Default::default()
         };
         let resp = handle(&task);
         let fb = resp.file_browser.expect("file_browser set");
         assert_eq!(fb.success, Some(true));
-        assert!(!fb.files.is_empty(), "expected at least hello.txt in the listing");
+        assert!(
+            !fb.files.is_empty(),
+            "expected at least hello.txt in the listing"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ls_dot_is_canonicalized_for_file_browser() {
+        let resolved = resolve_path(".");
+        let (name, parent) = split_name_parent(&resolved, ".");
+        assert_ne!(name, ".");
+        assert!(parent.is_some());
     }
 
     #[test]
@@ -331,12 +391,14 @@ mod tests {
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
         let task = TaskMessage {
             command: "ls".into(),
-            parameters: serde_json::json!({ "path": dir.to_string_lossy() })
-                .to_string(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
             ..Default::default()
         };
         let resp = handle(&task);
-        assert!(resp.user_output.is_none(), "user_output must be None to avoid double-display");
+        assert!(
+            resp.user_output.is_none(),
+            "user_output must be None to avoid double-display"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

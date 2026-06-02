@@ -1,0 +1,85 @@
+from mythic_container.MythicCommandBase import *
+
+from ._base import error_aware_process_response
+
+
+class PowerPickArguments(TaskArguments):
+    def __init__(self, command_line, **kwargs):
+        super().__init__(command_line, **kwargs)
+        self.args = [
+            CommandParameter(
+                name="command",
+                cli_name="Command",
+                display_name="Command",
+                type=ParameterType.String,
+                description="PowerShell command to execute in-process.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=True,
+                        group_name="Default",
+                        ui_position=1,
+                    )
+                ],
+            )
+        ]
+
+    async def parse_dictionary(self, dictionary_arguments):
+        self.load_args_from_dictionary(dictionary_arguments)
+
+    async def parse_arguments(self):
+        if not self.command_line.strip():
+            raise Exception(f"PowerPick requires a command.\n\tUsage: {PowerPickCommand.help_cmd}")
+        self.set_arg("command", self.command_line)
+
+
+class PowerPickCommand(CommandBase):
+    cmd = "powerpick"
+    needs_admin = False
+    help_cmd = "powerpick [command]"
+    description = "Execute PowerShell in-process through rustclr."
+    version = 1
+    author = "@zumpyx"
+    argument_class = PowerPickArguments
+    attackmapping = ["T1059.001"]
+    attributes = CommandAttributes(
+        spawn_and_injectable=False,
+        supported_os=[SupportedOS.Windows],
+        builtin=False,
+        load_only=False,
+        suggested_command=True,
+    )
+
+    async def create_go_tasking(
+        self, taskData: PTTaskMessageAllData
+    ) -> PTTaskCreateTaskingMessageResponse:
+        command = taskData.args.get_arg("command")
+        return PTTaskCreateTaskingMessageResponse(
+            TaskID=taskData.Task.ID,
+            Success=True,
+            DisplayParams=command,
+        )
+
+    async def process_response(
+        self, task: PTTaskMessageAllData, response: any
+    ) -> PTTaskProcessResponseMessageResponse:
+        return error_aware_process_response(task, response)
+
+
+class PowerPickAliasCommand(PowerPickCommand):
+    cmd = "PowerPick"
+    help_cmd = "PowerPick [command]"
+    attributes = CommandAttributes(
+        spawn_and_injectable=False,
+        supported_os=[SupportedOS.Windows],
+        builtin=False,
+        load_only=False,
+        suggested_command=False,
+        alias=True,
+    )
+
+    async def create_go_tasking(
+        self, taskData: PTTaskMessageAllData
+    ) -> PTTaskCreateTaskingMessageResponse:
+        response = await super().create_go_tasking(taskData)
+        response.CommandName = PowerPickCommand.cmd
+        return response

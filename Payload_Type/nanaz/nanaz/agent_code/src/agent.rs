@@ -14,7 +14,8 @@ use crate::config::Config;
 use crate::dispatch;
 use crate::sys::metadata;
 use crate::{
-    DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep, take_extra,
+    DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep,
+    take_extra,
 };
 
 // ── Helpers ─────────────────────────────────────────────

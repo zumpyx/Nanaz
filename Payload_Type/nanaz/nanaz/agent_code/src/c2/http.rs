@@ -1,7 +1,7 @@
-use core::sync::atomic::Ordering;
+use crate::DEBUG;
 use crate::Result;
 use crate::sys::network::http_request;
-use crate::DEBUG;
+use core::sync::atomic::Ordering;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -43,7 +43,6 @@ fn default_true() -> bool {
     true
 }
 
-
 /// Percent-encode bytes that aren't URL-safe.
 fn url_encode(s: &str) -> String {
     s.bytes()
@@ -61,22 +60,18 @@ fn url_encode(s: &str) -> String {
 /// pair — printing it in full would let observers correlate beacons without
 /// holding the PSK.
 ///
-/// In release builds the function is a no-op (the URL is logged verbatim,
-/// but the only callers are gated on `DEBUG.load()`, so a release build
-/// never invokes it). Keeping a non-`#[cfg(debug_assertions)]` body
-/// future-proofs against a caller being added without remembering to gate
-/// the function.
+/// In release builds this function is not compiled. The only callers pass it
+/// as an argument to the debug-only `info!` macro, so release builds never need
+/// the helper.
+#[cfg(debug_assertions)]
 fn redact_url(url: &str) -> String {
-    #[cfg(debug_assertions)]
-    {
-        if let Some(q) = url.find('?') {
-            let path = &url[..q];
-            let qs = &url[q + 1..];
-            if qs.len() <= 64 {
-                return format!("{path}?<{}_bytes_redacted>", qs.len());
-            }
-            return format!("{path}?{}…<{} bytes redacted>", &qs[..48], qs.len());
+    if let Some(q) = url.find('?') {
+        let path = &url[..q];
+        let qs = &url[q + 1..];
+        if qs.len() <= 64 {
+            return format!("{path}?<{}_bytes_redacted>", qs.len());
         }
+        return format!("{path}?{}…<{} bytes redacted>", &qs[..48], qs.len());
     }
     url.to_string()
 }

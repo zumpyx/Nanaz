@@ -9,17 +9,21 @@ use serde_json::Value;
 
 #[cfg(target_os = "linux")]
 fn gather_sysinfo() -> Result<Value, String> {
-    let hostname = std::process::Command::new("hostname").output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
 
     let os_name = std::fs::read_to_string("/etc/os-release")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("PRETTY_NAME="))
-                .map(|l| l.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string())
+            s.lines().find(|l| l.starts_with("PRETTY_NAME=")).map(|l| {
+                l.trim_start_matches("PRETTY_NAME=")
+                    .trim_matches('"')
+                    .to_string()
+            })
         })
         .unwrap_or_else(|| "Linux".into());
 
@@ -38,7 +42,10 @@ fn gather_sysinfo() -> Result<Value, String> {
         .find(|l| l.starts_with("model name"))
         .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
         .unwrap_or_else(|| "unknown".into());
-    let cpu_cores = cpu_info.lines().filter(|l| l.starts_with("processor")).count();
+    let cpu_cores = cpu_info
+        .lines()
+        .filter(|l| l.starts_with("processor"))
+        .count();
 
     let mem_info = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let mem_total = mem_info
@@ -67,10 +74,12 @@ fn gather_sysinfo() -> Result<Value, String> {
 
 #[cfg(target_os = "macos")]
 fn gather_sysinfo() -> Result<Value, String> {
-    let hostname = std::process::Command::new("hostname").output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
 
     let os_name = std::process::Command::new("sw_vers")
         .arg("-productName")
@@ -81,12 +90,7 @@ fn gather_sysinfo() -> Result<Value, String> {
                 .arg("-productVersion")
                 .output()
                 .ok()
-                .map(|v| {
-                    format!(
-                        "macOS {}",
-                        String::from_utf8_lossy(&v.stdout).trim()
-                    )
-                })
+                .map(|v| format!("macOS {}", String::from_utf8_lossy(&v.stdout).trim()))
         })
         .unwrap_or_else(|| "macOS".into());
 
@@ -114,14 +118,24 @@ fn gather_sysinfo() -> Result<Value, String> {
         .args(["-n", "hw.ncpu"])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
         .unwrap_or(0);
 
     let mem_total = std::process::Command::new("sysctl")
         .args(["-n", "hw.memsize"])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
         .map(|b| b / 1024)
         .unwrap_or(0);
 
@@ -165,10 +179,12 @@ fn gather_sysinfo() -> Result<Value, String> {
 fn gather_sysinfo() -> Result<Value, String> {
     use crate::sys::encoding::decode_output;
 
-    let hostname = std::process::Command::new("hostname").output().ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| "unknown".into());
+    let hostname = std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
 
     let arch = std::env::consts::ARCH.to_string();
 
