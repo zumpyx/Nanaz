@@ -14,13 +14,12 @@ TARGETS = {
     "Linux": "x86_64-unknown-linux-musl",
 }
 
-# Resolve agent_code path from this file's location so the builder works
-# regardless of the container's CWD. Layout: nanaz/{agent_code, mythic}.
-# builder.py lives at nanaz/mythic/agent_functions/builder.py, so we go
-# up three parents to reach `nanaz/` and then descend into `agent_code/`.
-AGENT_CODE_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent.parent / "agent_code"
-)
+# Resolve paths from this file's location so the builder works regardless of
+# the container's CWD. Layout: nanaz/{agent_code, mythic}. builder.py lives at
+# nanaz/mythic/agent_functions/builder.py, so three parents reaches nanaz/.
+AGENT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+MYTHIC_PATH = AGENT_ROOT / "mythic"
+AGENT_CODE_PATH = AGENT_ROOT / "agent_code"
 
 TOOL_DIRS = [
     pathlib.Path("/root/.cargo/bin"),
@@ -118,7 +117,7 @@ class Nanaz(PayloadType):
         ),
     ]
 
-    agent_path = pathlib.Path(".") / "nanaz" / "mythic"
+    agent_path = MYTHIC_PATH
     agent_icon_path = agent_path / "agent_functions" / "nanaz.svg"
     agent_code_path = AGENT_CODE_PATH
 
