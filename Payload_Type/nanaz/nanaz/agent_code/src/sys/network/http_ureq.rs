@@ -15,7 +15,7 @@ use rustls::{ClientConfig, DigitallySignedStruct, Error as RustlsError, Signatur
 use crate::{Error, Result};
 
 thread_local! {
-    static AGENT: RefCell<Option<ureq::Agent>> = RefCell::new(None);
+    static AGENT: RefCell<Option<ureq::Agent>> = const { RefCell::new(None) };
 }
 
 // ── TLS verifier that accepts everything ────────────────────
@@ -201,14 +201,13 @@ pub fn http_get_to_writer<W: std::io::Write>(
     // Pre-flight: if the server advertised a Content-Length larger than the
     // cap, fail closed before reading a single byte. We still respect the cap
     // during streaming for chunked / unknown-length responses.
-    if let Some(len) = response.header("Content-Length") {
-        if let Ok(n) = len.parse::<u64>() {
-            if n > max_bytes {
-                return Err(Error::Transport(format!(
-                    "Content-Length {n} exceeds cap {max_bytes}"
-                )));
-            }
-        }
+    if let Some(len) = response.header("Content-Length")
+        && let Ok(n) = len.parse::<u64>()
+        && n > max_bytes
+    {
+        return Err(Error::Transport(format!(
+            "Content-Length {n} exceeds cap {max_bytes}"
+        )));
     }
 
     let mut reader = response.into_reader();

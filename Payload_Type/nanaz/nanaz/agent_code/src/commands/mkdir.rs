@@ -48,7 +48,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: Some(format!("created directory {}", display_path(path))),
             ..Default::default()
         },
-        Err(e) => TaskResponse::failed(task.id, &format!("mkdir {} failed: {e}", display_path(path))),
+        Err(e) => TaskResponse::failed(
+            task.id,
+            &format!("mkdir {} failed: {e}", display_path(path)),
+        ),
     }
 }
 

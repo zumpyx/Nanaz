@@ -17,6 +17,16 @@ class DownloadArguments(FileBrowserArguments):
         # tasking panel.
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
+            CommandParameter(
+                name="chunk_size",
+                type=ParameterType.Number,
+                default_value=524288,
+            ),
+            CommandParameter(
+                name="allow_system_path",
+                type=ParameterType.Boolean,
+                default_value=False,
+            ),
         ]
 
 

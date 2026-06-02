@@ -90,7 +90,7 @@ class FileBrowserArguments(TaskArguments):
             except json.JSONDecodeError:
                 pass
         if self.cli_takes_path:
-            self.set_arg("path", cl)
+            self.set_arg("path", _strip_outer_quotes(cl))
 
 
 def simple_command_attributes(
@@ -116,6 +116,35 @@ def split_cli_preserve_backslashes(command_line: str) -> list[str]:
     lexer.whitespace_split = True
     lexer.commenters = ""
     return [_strip_outer_quotes(token) for token in lexer]
+
+
+def read_cli_token(command_line: str, offset: int = 0) -> tuple[str, int, int]:
+    """Read one shell-like token, preserving backslashes and returning spans."""
+    i = offset
+    n = len(command_line)
+    while i < n and command_line[i].isspace():
+        i += 1
+    start = i
+    quote = None
+    token = []
+    while i < n:
+        ch = command_line[i]
+        if quote:
+            if ch == quote:
+                quote = None
+            else:
+                token.append(ch)
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch.isspace():
+            break
+        token.append(ch)
+        i += 1
+    return "".join(token), start, i
 
 
 def _strip_outer_quotes(token: str) -> str:

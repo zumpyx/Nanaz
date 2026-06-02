@@ -120,15 +120,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     }
 
     // 2. Create parent directories if needed
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return TaskResponse::failed(
-                    task.id,
-                    &format!("create parent dir {} failed: {e}", display_path(parent)),
-                );
-            }
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return TaskResponse::failed(
+            task.id,
+            &format!("create parent dir {} failed: {e}", display_path(parent)),
+        );
     }
 
     let cap = params
@@ -179,7 +178,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     if let Err(e) = decode_result {
         // Best-effort cleanup of the partial file.
         let _ = std::fs::remove_file(path);
-        return TaskResponse::failed(task.id, &format!("upload {} failed: {e}", display_path(path)));
+        return TaskResponse::failed(
+            task.id,
+            &format!("upload {} failed: {e}", display_path(path)),
+        );
     }
 
     info!("[upload] wrote {} bytes to {}", written, display_path(path));
@@ -187,7 +189,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         task_id: task.id,
         completed: Some(true),
         status: Some("completed".into()),
-        user_output: Some(format!("uploaded {} bytes to {}", written, display_path(path))),
+        user_output: Some(format!(
+            "uploaded {} bytes to {}",
+            written,
+            display_path(path)
+        )),
         ..Default::default()
     }
 }

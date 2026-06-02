@@ -3,7 +3,7 @@ import base64
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 
-from ._base import error_aware_process_response, split_cli_preserve_backslashes
+from ._base import error_aware_process_response, read_cli_token
 
 
 class ExecuteAssemblyArguments(TaskArguments):
@@ -113,34 +113,38 @@ class ExecuteAssemblyArguments(TaskArguments):
             self.load_args_from_json_string(self.command_line)
             return
 
-        tokens = split_cli_preserve_backslashes(self.command_line)
+        cl = self.command_line.strip()
         assembly_name = ""
         assembly_arguments = ""
         patch_exit = None
 
         i = 0
-        while i < len(tokens):
-            token = tokens[i]
+        while i < len(cl):
+            token, start, end = read_cli_token(cl, i)
+            if not token:
+                break
             lower = token.lower()
             if lower in ("-assembly", "/assembly"):
-                i += 1
-                if i >= len(tokens):
+                assembly_name, _, i = read_cli_token(cl, end)
+                if not assembly_name:
                     raise Exception("-Assembly requires a filename")
-                assembly_name = tokens[i]
             elif lower in ("-arguments", "/arguments", "-args", "/args"):
-                assembly_arguments = " ".join(tokens[i + 1 :])
+                assembly_arguments = cl[end:].strip()
                 break
             elif lower in ("-patchexit", "/patchexit"):
-                i += 1
-                if i >= len(tokens):
+                value, _, i = read_cli_token(cl, end)
+                if not value:
                     raise Exception("-PatchExit requires true or false")
-                patch_exit = tokens[i].lower() not in ("false", "0", "no")
+                patch_exit = value.lower() not in ("false", "0", "no")
             elif not assembly_name:
                 assembly_name = token
-            elif not assembly_arguments:
-                assembly_arguments = " ".join(tokens[i:])
+                assembly_arguments = cl[end:].strip()
                 break
-            i += 1
+            elif not assembly_arguments:
+                assembly_arguments = cl[start:].strip()
+                break
+            else:
+                i = end
 
         if not assembly_name:
             raise Exception(

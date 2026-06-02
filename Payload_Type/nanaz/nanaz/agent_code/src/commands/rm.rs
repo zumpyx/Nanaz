@@ -80,9 +80,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     }],
                     ..Default::default()
                 },
-                Err(e) => {
-                    TaskResponse::failed(task.id, &format!("remove {} failed: {e}", display_path(path)))
-                }
+                Err(e) => TaskResponse::failed(
+                    task.id,
+                    &format!("remove {} failed: {e}", display_path(path)),
+                ),
             }
         }
         Err(e) => TaskResponse::failed(task.id, &format!("{}: {e}", display_path(path))),

@@ -10,6 +10,11 @@ class MkdirArguments(FileBrowserArguments):
         super().__init__(command_line, **kwargs)
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
+            CommandParameter(
+                name="allow_system_path",
+                type=ParameterType.Boolean,
+                default_value=False,
+            ),
         ]
 
 

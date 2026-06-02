@@ -39,23 +39,13 @@ fn is_load2_file_not_found(err: &impl std::fmt::Display) -> bool {
         && (message.contains("-2147024894") || message.contains("0x80070002"))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn split_args(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
-    let mut escaped = false;
 
     for ch in input.chars() {
-        if escaped {
-            cur.push(ch);
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
         match quote {
             Some(q) if ch == q => quote = None,
             Some(_) => cur.push(ch),
@@ -67,9 +57,6 @@ fn split_args(input: &str) -> Vec<String> {
             }
             None => cur.push(ch),
         }
-    }
-    if escaped {
-        cur.push('\\');
     }
     if !cur.is_empty() {
         args.push(cur);
@@ -224,12 +211,19 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
     #[test]
     fn test_split_args_quotes() {
         assert_eq!(
             split_args(r#"triage "/user:alice bob" /nowrap"#),
             vec!["triage", "/user:alice bob", "/nowrap"]
+        );
+    }
+
+    #[test]
+    fn test_split_args_preserves_windows_backslashes() {
+        assert_eq!(
+            split_args(r#"--path C:\Temp\a.txt "C:\Program Files\x.txt""#),
+            vec!["--path", r"C:\Temp\a.txt", r"C:\Program Files\x.txt"]
         );
     }
 

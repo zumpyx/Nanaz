@@ -79,10 +79,10 @@ pub fn local_ips() -> Vec<String> {
 
     #[cfg(target_os = "linux")]
     {
-        if let Ok(o) = Command::new("hostname").arg("-I").output() {
-            if let Ok(s) = String::from_utf8(o.stdout) {
-                ips.extend(s.split_whitespace().map(|s| s.to_string()));
-            }
+        if let Ok(o) = Command::new("hostname").arg("-I").output()
+            && let Ok(s) = String::from_utf8(o.stdout)
+        {
+            ips.extend(s.split_whitespace().map(|s| s.to_string()));
         }
     }
 
@@ -155,9 +155,7 @@ fn windows_local_ips_via_ffi() -> Vec<String> {
         for _ in 0..3 {
             let rc = GetAdaptersAddresses(
                 FAMILY_FLAGS,
-                GAA_FLAG_SKIP_ANYCAST
-                    | GAA_FLAG_SKIP_MULTICAST
-                    | GAA_FLAG_SKIP_DNS_SERVER,
+                GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
                 std::ptr::null(),
                 buf.as_mut_ptr() as *mut IP_ADAPTER_ADDRESSES_LH,
                 &mut buf_len,

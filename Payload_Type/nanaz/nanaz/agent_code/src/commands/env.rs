@@ -24,15 +24,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     let filter = params.key.as_ref().map(|k| k.to_lowercase());
     let mut vars: Vec<(String, String)> = std::env::vars().collect();
-    vars.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    vars.sort_by_key(|a| a.0.to_lowercase());
 
     let output: Vec<String> = vars
         .iter()
-        .filter(|(k, _)| {
-            filter
-                .as_ref()
-                .map_or(true, |f| k.to_lowercase().contains(f))
-        })
+        .filter(|(k, _)| filter.as_ref().is_none_or(|f| k.to_lowercase().contains(f)))
         .map(|(k, v)| format!("{k}={v}"))
         .collect();
 

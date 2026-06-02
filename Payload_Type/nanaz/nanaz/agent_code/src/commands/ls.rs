@@ -170,7 +170,7 @@ fn entry_from_direntry(entry: &fs::DirEntry, path_prefix: &str) -> Option<FileBr
             .as_ref()
             .and_then(|m| m.modified().ok())
             .and_then(to_millis),
-        permissions: child_meta.as_ref().and_then(|m| permissions_value(m)),
+        permissions: child_meta.as_ref().and_then(permissions_value),
         ..Default::default()
     })
 }
@@ -194,8 +194,8 @@ fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
     dirs.push((root.to_path_buf(), String::new()));
 
     while let Some((dir, prefix)) = dirs.pop() {
-        let rd =
-            fs::read_dir(&dir).map_err(|e| format!("read_dir {} failed: {e}", render_path(&dir)))?;
+        let rd = fs::read_dir(&dir)
+            .map_err(|e| format!("read_dir {} failed: {e}", render_path(&dir)))?;
         for entry in rd.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if let Some(fb) = entry_from_direntry(&entry, &prefix) {

@@ -77,10 +77,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let dst = Path::new(&dst_str);
 
     // Create parent dirs of dst if needed
-    if let Some(parent) = dst.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+    if let Some(parent) = dst.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        return TaskResponse::failed(
+            task.id,
+            &format!("create parent dir {} failed: {e}", display_path(parent)),
+        );
     }
 
     match std::fs::rename(src, dst) {
@@ -88,7 +92,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(format!("moved {} → {}", display_path(src), display_path(dst))),
+            user_output: Some(format!(
+                "moved {} → {}",
+                display_path(src),
+                display_path(dst)
+            )),
             ..Default::default()
         },
         Err(e) if is_cross_device(&e) => {
@@ -128,7 +136,11 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         }
         Err(e) => TaskResponse::failed(
             task.id,
-            &format!("rename {} → {} failed: {e}", display_path(src), display_path(dst)),
+            &format!(
+                "rename {} → {} failed: {e}",
+                display_path(src),
+                display_path(dst)
+            ),
         ),
     }
 }

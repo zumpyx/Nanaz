@@ -74,7 +74,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) => {
-            return TaskResponse::failed(task.id, &format!("stat {} failed: {e}", display_path(path)));
+            return TaskResponse::failed(
+                task.id,
+                &format!("stat {} failed: {e}", display_path(path)),
+            );
         }
     };
     let cap = params
@@ -96,7 +99,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 ..Default::default()
             }
         }
-        Err(e) => TaskResponse::failed(task.id, &format!("read {} failed: {e}", display_path(path))),
+        Err(e) => {
+            TaskResponse::failed(task.id, &format!("read {} failed: {e}", display_path(path)))
+        }
     }
 }
 
@@ -108,7 +113,10 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            return TaskResponse::failed(task.id, &format!("open {} failed: {e}", display_path(path)));
+            return TaskResponse::failed(
+                task.id,
+                &format!("open {} failed: {e}", display_path(path)),
+            );
         }
     };
 

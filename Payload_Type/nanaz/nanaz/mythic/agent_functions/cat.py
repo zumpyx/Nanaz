@@ -14,6 +14,11 @@ class CatArguments(FileBrowserArguments):
                 type=ParameterType.String,
                 default_value="",
             ),
+            CommandParameter(
+                name="allow_system_path",
+                type=ParameterType.Boolean,
+                default_value=False,
+            ),
         ]
 
 

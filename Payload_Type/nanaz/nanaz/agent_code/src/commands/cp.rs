@@ -67,8 +67,13 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let actual_dst = if dst.is_dir() {
         dst.join(src.file_name().unwrap_or_default())
     } else if let Some(parent) = dst.parent() {
-        if !parent.as_os_str().is_empty() {
-            let _ = std::fs::create_dir_all(parent);
+        if !parent.as_os_str().is_empty()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return TaskResponse::failed(
+                task.id,
+                &format!("create parent dir {} failed: {e}", display_path(parent)),
+            );
         }
         dst.to_path_buf()
     } else {
