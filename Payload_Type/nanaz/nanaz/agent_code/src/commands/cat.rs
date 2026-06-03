@@ -21,7 +21,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use mythic::{TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
@@ -96,6 +96,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 completed: Some(true),
                 status: Some("completed".into()),
                 user_output: Some(content),
+                artifacts: vec![Artifact {
+                    base_artifact: "FileOpen".into(),
+                    artifact: display_path(path),
+                    needs_cleanup: false,
+                    resolved: true,
+                }],
                 ..Default::default()
             }
         }
@@ -169,6 +175,12 @@ fn emit_head_tail(task: &TaskMessage, path: &Path, total: u64) -> TaskResponse {
         completed: Some(true),
         status: Some("completed".into()),
         user_output: Some(body),
+        artifacts: vec![Artifact {
+            base_artifact: "FileOpen".into(),
+            artifact: display_path(path),
+            needs_cleanup: false,
+            resolved: true,
+        }],
         ..Default::default()
     }
 }

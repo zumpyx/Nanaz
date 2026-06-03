@@ -1,17 +1,20 @@
 //! Process execution helpers for shell-specific commands and direct exec.
 
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use mythic::{TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::sys::encoding::decode_output;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
+const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 pub enum ShellKind {
@@ -154,69 +157,99 @@ fn run_child(
     label: &str,
     display_command: &str,
 ) -> TaskResponse {
-    let mut child = match Command::new(bin)
+    let mut command = Command::new(bin);
+    command
         .args(&args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(e) => return TaskResponse::failed(task_id, &format!("{label} failed: {e}")),
     };
 
     let child_id = child.id();
     let timeout = Duration::from_secs(timeout_secs.max(1));
-    let Some(mut stdout) = child.stdout.take() else {
+    let Some(stdout) = child.stdout.take() else {
         return TaskResponse::failed(task_id, &format!("{label} stdout pipe unavailable"));
     };
-    let Some(mut stderr) = child.stderr.take() else {
+    let Some(stderr) = child.stderr.take() else {
         return TaskResponse::failed(task_id, &format!("{label} stderr pipe unavailable"));
     };
 
+    let stdout_thread = std::thread::spawn(move || read_limited(stdout));
+    let stderr_thread = std::thread::spawn(move || read_limited(stderr));
+
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut out_buf = Vec::new();
-        let mut err_buf = Vec::new();
-        let _ = stdout.read_to_end(&mut out_buf);
-        let _ = stderr.read_to_end(&mut err_buf);
         let status = child.wait().ok();
-        let _ = tx.send((status, out_buf, err_buf));
+        let _ = tx.send(status);
     });
 
     match rx.recv_timeout(timeout) {
-        Ok((status, out_buf, err_buf)) => {
+        Ok(status) => {
+            let (out_buf, out_truncated) = stdout_thread.join().unwrap_or_default();
+            let (err_buf, err_truncated) = stderr_thread.join().unwrap_or_default();
             let stdout_str = decode_output(&out_buf);
             let stderr_str = decode_output(&err_buf);
-            let output = if stderr_str.is_empty() {
+            let mut output = if stderr_str.is_empty() {
                 stdout_str
             } else {
                 format!("{stdout_str}\n{stderr_str}")
             };
+            if out_truncated || err_truncated {
+                output.push_str(&format!(
+                    "\n[output truncated at {} bytes per stream]",
+                    MAX_OUTPUT_BYTES
+                ));
+            }
             let code = status.and_then(|s| s.code()).unwrap_or(-1);
             let result_msg = if code == 0 {
                 output
             } else {
                 format!("{output}\n[exit code: {code}]")
             };
+            let success = code == 0;
             TaskResponse {
                 task_id,
                 completed: Some(true),
-                status: Some("completed".into()),
+                status: Some(if success { "completed" } else { "error" }.into()),
                 user_output: Some(result_msg),
+                artifacts: vec![Artifact {
+                    base_artifact: "ProcessCreate".into(),
+                    artifact: display_command.into(),
+                    needs_cleanup: false,
+                    resolved: true,
+                }],
                 ..Default::default()
             }
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             #[cfg(unix)]
             {
-                let _ = Command::new("kill")
-                    .args(["-9", &child_id.to_string()])
-                    .output();
+                let pgid = -(child_id as i32);
+                unsafe {
+                    libc::kill(pgid, libc::SIGTERM);
+                }
+                std::thread::sleep(Duration::from_millis(250));
+                unsafe {
+                    libc::kill(pgid, libc::SIGKILL);
+                }
             }
             #[cfg(windows)]
             {
                 let _ = Command::new("taskkill")
-                    .args(["/F", "/PID", &child_id.to_string()])
+                    .args(["/T", "/F", "/PID", &child_id.to_string()])
                     .output();
             }
             let _ = rx.recv_timeout(Duration::from_secs(2));
@@ -229,6 +262,17 @@ fn run_child(
             TaskResponse::failed(task_id, &format!("{label} process terminated unexpectedly"))
         }
     }
+}
+
+fn read_limited<R: Read>(reader: R) -> (Vec<u8>, bool) {
+    let mut limited = reader.take((MAX_OUTPUT_BYTES + 1) as u64);
+    let mut buf = Vec::new();
+    let _ = limited.read_to_end(&mut buf);
+    let truncated = buf.len() > MAX_OUTPUT_BYTES;
+    if truncated {
+        buf.truncate(MAX_OUTPUT_BYTES);
+    }
+    (buf, truncated)
 }
 
 #[cfg(test)]
@@ -254,6 +298,26 @@ mod tests {
             };
             let resp = handle_shell(&task, ShellKind::Cmd);
             assert_eq!(resp.status.as_deref(), Some("error"));
+        }
+    }
+
+    #[test]
+    fn test_nonzero_exit_is_error() {
+        #[cfg(not(windows))]
+        {
+            let task = TaskMessage {
+                command: "sh".into(),
+                parameters: r#"{"command":"exit 7"}"#.into(),
+                ..Default::default()
+            };
+            let resp = handle_shell(&task, ShellKind::Sh);
+            assert_eq!(resp.status.as_deref(), Some("error"));
+            assert!(
+                resp.user_output
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("[exit code: 7]")
+            );
         }
     }
 }

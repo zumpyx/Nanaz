@@ -8,7 +8,7 @@ class ExitArguments(TaskArguments):
             CommandParameter(
                 name="method",
                 type=ParameterType.ChooseOne,
-                choices=["process", "thread"],
+                choices=["process"],
                 default_value="process",
                 parameter_group_info=[
                     ParameterGroupInfo(
@@ -33,8 +33,8 @@ class ExitArguments(TaskArguments):
 class ExitCommand(CommandBase):
     cmd = "exit"
     needs_admin = False
-    help_cmd = "exit [process|thread]"
-    description = "Exit the implant — process (kill entire process) or thread (stop beacon loop only)."
+    help_cmd = "exit [process]"
+    description = "Exit the implant process after flushing pending responses."
     version = 1
     author = "@zumpyx"
     argument_class = ExitArguments

@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use mythic::{TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
@@ -131,11 +131,17 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         completed: Some(true),
         status: Some("completed".into()),
         user_output: Some(format!(
-            "downloaded {} → {} ({} bytes)",
+            "downloaded {} -> {} ({} bytes)",
             params.url,
             display_path(&dest),
             n
         )),
+        artifacts: vec![Artifact {
+            base_artifact: "FileWrite".into(),
+            artifact: display_path(&dest),
+            needs_cleanup: true,
+            resolved: true,
+        }],
         ..Default::default()
     }
 }

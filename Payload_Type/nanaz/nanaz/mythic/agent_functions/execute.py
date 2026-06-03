@@ -1,6 +1,9 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import error_aware_process_response, read_cli_token
+from ._base import (
+    error_aware_process_response,
+    read_cli_token,
+)
 
 
 class ExecuteArguments(TaskArguments):

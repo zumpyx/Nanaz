@@ -111,7 +111,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         task_id: task.id,
         completed: Some(true),
         status: Some("completed".into()),
-        user_output: Some(format!("cwd → {display}")),
+        user_output: Some(format!("cwd -> {display}")),
         process_response: Some(json!({ "cwd": display })),
         ..Default::default()
     }

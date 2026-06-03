@@ -10,7 +10,7 @@
 //! negatives (refusing a legitimate write) are cheap; false positives
 //! (clobbering /etc/passwd) are not.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// Path prefixes (lowercased) that require `allow_system_path: true` to
 /// touch. Matches both Windows and Unix conventions.
@@ -30,8 +30,9 @@ pub const PROTECTED_PREFIXES: &[&str] = &[
 
 /// Normalize operator-supplied paths to the target platform separator.
 ///
-/// Operators can type `/` everywhere. On Windows the agent maps it to `\`;
-/// on Unix a typed `\` is treated as `/` for consistency with the UI.
+/// Operators can type `/` everywhere on Windows and the agent maps it to `\`.
+/// On Unix, `\` is a legal filename byte, so it must not be rewritten into a
+/// path separator.
 pub fn normalize_user_path(path: &str) -> String {
     #[cfg(windows)]
     {
@@ -39,23 +40,70 @@ pub fn normalize_user_path(path: &str) -> String {
     }
     #[cfg(not(windows))]
     {
-        path.trim().replace('\\', "/")
+        path.trim().to_string()
     }
 }
 
 /// Render a target path for operator output. Windows paths are always shown
 /// with backslashes; Unix paths are always shown with forward slashes.
 pub fn display_path(path: &Path) -> String {
-    normalize_user_path(&path.to_string_lossy())
+    display_path_str(&path.to_string_lossy())
+}
+
+/// Render an already-stringified target path for operator output.
+pub fn display_path_str(path: &str) -> String {
+    let normalized = normalize_user_path(path);
+    #[cfg(windows)]
+    {
+        normalized
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&normalized)
+            .to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        normalized
+    }
+}
+
+fn looks_windows_absolute(path: &str) -> bool {
+    path.starts_with("//")
+        || (path.len() >= 3 && path.as_bytes()[1] == b':' && path.as_bytes()[2] == b'/')
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component.as_os_str());
+                }
+            }
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
+                out.push(component.as_os_str());
+            }
+        }
+    }
+    out
 }
 
 fn normalize_for_match(path: &str) -> String {
     let normalized = normalize_user_path(path);
-    let path = Path::new(&normalized);
-    let canonical = std::fs::canonicalize(path)
+    let input = Path::new(&normalized);
+    let candidate = if input.is_absolute() || looks_windows_absolute(&normalized.replace('\\', "/"))
+    {
+        PathBuf::from(&normalized)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(&normalized)
+    };
+    let canonical = std::fs::canonicalize(&candidate)
         .ok()
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or(normalized);
+        .unwrap_or_else(|| lexical_normalize(&candidate).to_string_lossy().to_string());
     normalize_user_path(&canonical)
         .replace('\\', "/")
         .trim_end_matches(['/', '\\'])
@@ -100,6 +148,15 @@ mod tests {
         assert!(!is_protected_path("/etcetera/passwd"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn relative_paths_are_checked_from_current_dir() {
+        let old = std::env::current_dir().unwrap();
+        std::env::set_current_dir("/").unwrap();
+        assert!(is_protected_path("etc/nanaz_should_not_exist"));
+        std::env::set_current_dir(old).unwrap();
+    }
+
     #[test]
     fn windows_protected() {
         assert!(is_protected_path(
@@ -130,6 +187,12 @@ mod tests {
         #[cfg(windows)]
         assert_eq!(normalize_user_path("C:/Users/bob"), "C:\\Users\\bob");
         #[cfg(not(windows))]
-        assert_eq!(normalize_user_path(r"\tmp\nanaz"), "/tmp/nanaz");
+        assert_eq!(normalize_user_path(r"\tmp\nanaz"), r"\tmp\nanaz");
+    }
+
+    #[test]
+    fn display_path_str_strips_windows_extended_prefix() {
+        #[cfg(windows)]
+        assert_eq!(display_path_str(r"\\?\C:\Users\bob"), r"C:\Users\bob");
     }
 }

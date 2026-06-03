@@ -3,7 +3,6 @@ from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
     MythicRPCTaskUpdateMessage,
     SendMythicRPCTaskUpdate,
 )
-from ._base import split_cli_preserve_backslashes
 
 from ._base import FileBrowserArguments, simple_command_attributes
 
@@ -27,43 +26,7 @@ class LsArguments(FileBrowserArguments):
                     )
                 ],
             ),
-            CommandParameter(
-                name="recursive",
-                type=ParameterType.Boolean,
-                default_value=False,
-                parameter_group_info=[
-                    ParameterGroupInfo(
-                        required=False,
-                        group_name="Default",
-                        ui_position=2,
-                    )
-                ],
-            ),
         ]
-
-    async def parse_arguments(self):
-        # Extend FileBrowserArguments.parse_arguments to also recognise
-        # the `ls -r` / `ls -r /path` CLI forms.
-        cl = self.command_line.strip()
-        if not cl or cl.startswith("{"):
-            await super().parse_arguments()
-            return
-        path = "."
-        recursive = False
-        try:
-            parts = split_cli_preserve_backslashes(cl)
-        except ValueError as e:
-            raise Exception(f"ls: failed to parse command line: {e}")
-        path_parts = []
-        for part in parts:
-            if part in ("-r", "-R"):
-                recursive = True
-            else:
-                path_parts.append(part)
-        if path_parts:
-            path = " ".join(path_parts)
-        self.set_arg("path", path)
-        self.set_arg("recursive", recursive)
 
 
 class LsCommand(CommandBase):
@@ -84,8 +47,7 @@ class LsCommand(CommandBase):
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
         path = taskData.args.get_arg("path") or "."
-        rec = taskData.args.get_arg("recursive")
-        response.DisplayParams = f"{path}" + (" -r" if rec else "")
+        response.DisplayParams = path
 
         return response
 

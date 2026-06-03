@@ -1,10 +1,4 @@
 from mythic_container.MythicCommandBase import *
-from mythic_container.MythicGoRPC.send_mythic_rpc_task_update import (
-    MythicRPCTaskUpdateMessage,
-    SendMythicRPCTaskUpdate,
-)
-
-
 class PsArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
         super().__init__(command_line, **kwargs)
@@ -71,19 +65,6 @@ class PsCommand(CommandBase):
             err = response.get("user_output") or "ps failed"
             resp.Success = False
             resp.Error = err
-            await SendMythicRPCTaskUpdate(
-                MythicRPCTaskUpdateMessage(TaskID=task.Task.ID, UpdateStdout=err)
-            )
             return resp
 
-        processes = response.get("processes")
-        if processes is not None:
-            import json
-
-            await SendMythicRPCTaskUpdate(
-                MythicRPCTaskUpdateMessage(
-                    TaskID=task.Task.ID,
-                    UpdateStdout=json.dumps(processes),
-                )
-            )
         return resp

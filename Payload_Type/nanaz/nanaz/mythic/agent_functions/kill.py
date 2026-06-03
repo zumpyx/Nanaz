@@ -12,9 +12,14 @@ fast happy path); for that, the operator types `kill -9 <pid>` from
 the CLI.
 """
 
+import json
+
 from mythic_container.MythicCommandBase import *
 
-from ._base import error_aware_process_response, simple_command_attributes
+from ._base import (
+    error_aware_process_response,
+    simple_command_attributes,
+)
 
 
 class KillArguments(TaskArguments):
@@ -53,9 +58,10 @@ class KillArguments(TaskArguments):
                 data = json.loads(cl)
             except json.JSONDecodeError as e:
                 raise Exception(f"kill: invalid JSON: {e}")
-            if "pid" not in data:
-                raise Exception("kill: JSON missing 'pid' field")
-            self.set_arg("pid", int(data["pid"]))
+            pid = data.get("pid", data.get("process_id"))
+            if pid is None:
+                raise Exception("kill: JSON missing 'pid' or 'process_id' field")
+            self.set_arg("pid", int(pid))
             if "force" in data:
                 self.set_arg("force", bool(data["force"]))
             return
@@ -87,10 +93,11 @@ class KillArguments(TaskArguments):
             self.set_arg("force", True)
 
     async def parse_dictionary(self, dictionary_arguments):
-        """Process browser context menu sends {pid: N}."""
-        if "pid" not in dictionary_arguments:
-            raise Exception("kill: missing 'pid' in task parameters")
-        self.set_arg("pid", int(dictionary_arguments["pid"]))
+        """Process browser context menu sends {process_id: N}; custom tables may send {pid: N}."""
+        pid = dictionary_arguments.get("pid", dictionary_arguments.get("process_id"))
+        if pid is None:
+            raise Exception("kill: missing 'pid' or 'process_id' in task parameters")
+        self.set_arg("pid", int(pid))
         if "force" in dictionary_arguments:
             self.set_arg("force", bool(dictionary_arguments["force"]))
 

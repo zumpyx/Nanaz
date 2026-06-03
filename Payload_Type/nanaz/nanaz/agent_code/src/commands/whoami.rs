@@ -1,6 +1,7 @@
 //! Current user identity — cross-platform.
 
 use mythic::{TaskMessage, TaskResponse};
+use serde::Deserialize;
 
 #[cfg(not(windows))]
 fn run_cmd(bin: &str, args: &[&str]) -> Option<String> {
@@ -13,6 +14,19 @@ fn run_cmd(bin: &str, args: &[&str]) -> Option<String> {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
+    #[derive(Deserialize, Default)]
+    #[serde(deny_unknown_fields)]
+    struct Params {}
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    if let Err(e) = serde_json::from_str::<Params>(parameters) {
+        return TaskResponse::failed(task.id, &format!("whoami parse error: {e}"));
+    }
+
     #[cfg(windows)]
     let info = {
         let user = std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into());

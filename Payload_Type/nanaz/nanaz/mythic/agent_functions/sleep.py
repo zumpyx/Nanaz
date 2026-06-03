@@ -8,7 +8,7 @@ class SleepArguments(TaskArguments):
             CommandParameter(
                 name="interval",
                 type=ParameterType.Number,
-                default_value=-1,
+                default_value=0,
                 parameter_group_info=[
                     ParameterGroupInfo(
                         ui_position=0,
@@ -40,20 +40,26 @@ class SleepArguments(TaskArguments):
             )
         parts = self.command_line.split(" ", maxsplit=1)
         try:
-            self.set_arg("interval", int(parts[0]))
+            interval = int(parts[0])
         except Exception:
             raise Exception(
                 "sleep requires an integer value (in seconds) to be passed on the command line to update the sleep value to."
             )
+        if interval < 0:
+            raise Exception("sleep interval must be >= 0 seconds.")
+        self.set_arg("interval", interval)
         if len(parts) == 2:
             try:
-                self.set_arg("jitter", int(parts[1]))
+                jitter = int(parts[1])
             except Exception:
                 raise Exception(
                     "sleep requires an integer value for jitter, but received: {}".format(
                         parts[1]
                     )
                 )
+            if jitter < 0 or jitter > 100:
+                raise Exception("sleep jitter must be between 0 and 100.")
+            self.set_arg("jitter", jitter)
 
 
 class SleepCommand(CommandBase):
@@ -82,6 +88,14 @@ class SleepCommand(CommandBase):
         )
         interval = taskData.args.get_arg("interval")
         jitter = taskData.args.get_arg("jitter")
+        if interval is None or interval < 0:
+            response.Success = False
+            response.Error = "sleep interval must be >= 0 seconds."
+            return response
+        if jitter is not None and (jitter < 0 or jitter > 100):
+            response.Success = False
+            response.Error = "sleep jitter must be between 0 and 100."
+            return response
         displayParams = f"-interval {interval}"
         if jitter and jitter > 0:
             displayParams += f" -jitter {jitter}"

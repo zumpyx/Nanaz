@@ -28,7 +28,7 @@ class PowerPickArguments(TaskArguments):
 
     async def parse_arguments(self):
         if not self.command_line.strip():
-            raise Exception(f"PowerPick requires a command.\n\tUsage: {PowerPickCommand.help_cmd}")
+            raise Exception(f"powerpick requires a command.\n\tUsage: {PowerPickCommand.help_cmd}")
         self.set_arg("command", self.command_line)
 
 
@@ -63,23 +63,3 @@ class PowerPickCommand(CommandBase):
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
         return error_aware_process_response(task, response)
-
-
-class PowerPickAliasCommand(PowerPickCommand):
-    cmd = "PowerPick"
-    help_cmd = "PowerPick [command]"
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-        alias=True,
-    )
-
-    async def create_go_tasking(
-        self, taskData: PTTaskMessageAllData
-    ) -> PTTaskCreateTaskingMessageResponse:
-        response = await super().create_go_tasking(taskData)
-        response.CommandName = PowerPickCommand.cmd
-        return response

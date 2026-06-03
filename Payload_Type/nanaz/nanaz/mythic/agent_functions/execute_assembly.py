@@ -3,7 +3,12 @@ import base64
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 
-from ._base import error_aware_process_response, read_cli_token
+from ._base import (
+    error_aware_process_response,
+    read_cli_token,
+)
+
+MAX_ASSEMBLY_BYTES = 16 * 1024 * 1024
 
 
 class ExecuteAssemblyArguments(TaskArguments):
@@ -73,6 +78,24 @@ class ExecuteAssemblyArguments(TaskArguments):
                         required=False,
                         group_name="New Assembly",
                         ui_position=3,
+                    ),
+                ],
+            ),
+            CommandParameter(
+                name="max_bytes",
+                type=ParameterType.Number,
+                default_value=MAX_ASSEMBLY_BYTES,
+                description="Maximum assembly size accepted for in-task transfer.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=4,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=4,
                     ),
                 ],
             ),
@@ -217,6 +240,15 @@ class ExecuteAssemblyCommand(CommandBase):
             )
             if not content_resp.Success or content_resp.Content is None:
                 raise Exception(content_resp.Error or "failed to fetch assembly bytes")
+            max_bytes = taskData.args.get_arg("max_bytes") or MAX_ASSEMBLY_BYTES
+            if max_bytes < 1 or max_bytes > MAX_ASSEMBLY_BYTES:
+                raise Exception(
+                    f"max_bytes must be between 1 and {MAX_ASSEMBLY_BYTES}"
+                )
+            if len(content_resp.Content) > max_bytes:
+                raise Exception(
+                    f"assembly is {len(content_resp.Content)} bytes, exceeds max_bytes={max_bytes}"
+                )
 
             taskData.args.add_arg(
                 "assembly_b64",
@@ -236,23 +268,3 @@ class ExecuteAssemblyCommand(CommandBase):
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
         return error_aware_process_response(task, response)
-
-
-class ExecuteAssemblyCamelCommand(ExecuteAssemblyCommand):
-    cmd = "executeAssembly"
-    help_cmd = "executeAssembly [Assembly.exe] [args]"
-    attributes = CommandAttributes(
-        spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows],
-        builtin=False,
-        load_only=False,
-        suggested_command=False,
-        alias=True,
-    )
-
-    async def create_go_tasking(
-        self, taskData: PTTaskMessageAllData
-    ) -> PTTaskCreateTaskingMessageResponse:
-        response = await super().create_go_tasking(taskData)
-        response.CommandName = ExecuteAssemblyCommand.cmd
-        return response

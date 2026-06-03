@@ -10,8 +10,9 @@ if str(parent_dir) not in sys.path:
 agent_dir = parent_dir / "agent_functions"
 
 if agent_dir.is_dir():
+    load_errors = []
     for file_path in agent_dir.rglob("*.py"):
-        if file_path.name == "__init__.py":
+        if file_path.name == "__init__.py" or file_path.stem.startswith("_"):
             continue
 
         try:
@@ -23,6 +24,11 @@ if agent_dir.is_dir():
             print(f"[+] Successfully loaded Mythic component/command: {sub_module}")
 
         except Exception as e:
-            print(f"[-] Failed to dynamically load module [{file_path.name}]: {e}")
+            msg = f"[-] Failed to dynamically load module [{file_path.name}]: {e}"
+            print(msg)
+            load_errors.append(msg)
+    if load_errors:
+        raise RuntimeError("\n".join(load_errors))
 else:
     print(f"[-] Error: Directory not found: {agent_dir}")
+    raise RuntimeError(f"agent_functions directory not found: {agent_dir}")

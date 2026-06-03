@@ -1,6 +1,10 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, error_aware_process_response, simple_command_attributes
+from ._base import (
+    FileBrowserArguments,
+    error_aware_process_response,
+    simple_command_attributes,
+)
 
 
 class MkdirArguments(FileBrowserArguments):

@@ -50,12 +50,28 @@ fn clock_ticks_per_second() -> u64 {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn boot_time_millis() -> Option<u64> {
+    std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            if parts.next()? != "btime" {
+                return None;
+            }
+            let seconds: u64 = parts.next()?.parse().ok()?;
+            Some(seconds * 1000)
+        })
+}
+
 // ── Linux: parse /proc ──────────────────────────────────────
 
 #[cfg(target_os = "linux")]
 fn list_processes() -> Result<Vec<ProcessEntry>, String> {
     let mut procs: Vec<ProcessEntry> = Vec::new();
     let hz = clock_ticks_per_second();
+    let boot_ms = boot_time_millis().unwrap_or(0);
     let host = process_host();
 
     let dir = std::fs::read_dir("/proc").map_err(|e| format!("read /proc: {e}"))?;
@@ -95,7 +111,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
         // tick rate.
         let start_time: Option<i64> = fields.get(19).and_then(|s| {
             let ticks: u64 = s.parse().ok()?;
-            Some((ticks * 1000 / hz) as i64)
+            Some((boot_ms + (ticks * 1000 / hz)) as i64)
         });
 
         // Read /proc/<pid>/cmdline for command line
@@ -207,6 +223,7 @@ struct Win32Process {
     name: Option<String>,
     executable_path: Option<String>,
     command_line: Option<String>,
+    user: Option<String>,
 }
 
 #[cfg(windows)]
@@ -276,6 +293,7 @@ fn parse_powershell_process_json(stdout: &str) -> Result<Vec<ProcessEntry>, Stri
         };
         let bin_path = non_empty(proc.executable_path);
         let command_line = non_empty(proc.command_line);
+        let user = non_empty(proc.user);
         let name = process_name(proc.name, bin_path.as_ref(), command_line.as_ref());
 
         out.push(ProcessEntry {
@@ -286,6 +304,7 @@ fn parse_powershell_process_json(stdout: &str) -> Result<Vec<ProcessEntry>, Stri
             architecture: Some(std::env::consts::ARCH.into()),
             bin_path,
             command_line,
+            user,
             ..Default::default()
         });
     }
@@ -294,7 +313,7 @@ fn parse_powershell_process_json(stdout: &str) -> Result<Vec<ProcessEntry>, Stri
 
 #[cfg(windows)]
 fn list_processes() -> Result<Vec<ProcessEntry>, String> {
-    let ps_script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Compress";
+    let ps_script = "Get-CimInstance Win32_Process | ForEach-Object { $owner = $_ | Invoke-CimMethod -MethodName GetOwner -ErrorAction SilentlyContinue; [pscustomobject]@{ ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; Name=$_.Name; ExecutablePath=$_.ExecutablePath; CommandLine=$_.CommandLine; User=$(if ($owner.User) { if ($owner.Domain) { \"$($owner.Domain)\\\\$($owner.User)\" } else { $owner.User } } else { '' }) } } | ConvertTo-Json -Compress";
     if let Ok(output) = std::process::Command::new("powershell.exe")
         .args([
             "-NoProfile",
@@ -401,16 +420,19 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     match list_processes() {
         Ok(mut procs) => {
-            // Mark for auto-cleanup on all entries. Mythic's unified
-            // Process Browser groups rows by host; although the docs say host
-            // is optional, the Rust wire struct serializes it as a string. An
-            // empty string makes the browser associate the rows with an empty
-            // host instead of the callback's host.
+            // Mythic's Process Browser groups rows by host; although the docs
+            // say host is optional, the Rust wire struct serializes it as a
+            // string. An empty string makes the browser associate the rows
+            // with an empty host instead of the callback's host.
+            //
+            // Do not default update_deleted=true here. Mythic's server-side
+            // cleanup searches by operation/host/group, not by callback only,
+            // so callbacks on the same host can prevent the current callback
+            // from getting a complete process tree.
             for p in &mut procs {
                 if p.host.trim().is_empty() {
                     p.host = process_host();
                 }
-                p.update_deleted = true;
             }
 
             // BrowserScript receives normal response text, not only the
@@ -478,5 +500,17 @@ mod tests {
             assert!(!entry.name.is_empty());
             assert!(!entry.host.is_empty());
         }
+    }
+
+    #[test]
+    fn test_ps_does_not_default_update_deleted() {
+        let task = TaskMessage {
+            command: "ps".into(),
+            parameters: "{}".into(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert!(!resp.processes.is_empty());
+        assert!(resp.processes.iter().all(|p| !p.update_deleted));
     }
 }

@@ -12,6 +12,11 @@ struct Params {
 pub fn handle(task: &TaskMessage) -> TaskResponse {
     match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => {
+            if let Some(jitter) = p.jitter
+                && jitter > 100
+            {
+                return TaskResponse::failed(task.id, "sleep jitter must be between 0 and 100");
+            }
             set_sleep(p.interval, p.jitter);
             TaskResponse {
                 task_id: task.id,

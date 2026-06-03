@@ -50,18 +50,12 @@ class FileBrowserArguments(TaskArguments):
             if k in arg_names and k not in ("host", "full_path")
         }
 
-        if dictionary_arguments.get("full_path") and "path" in arg_names:
-            clean_args["path"] = dictionary_arguments["full_path"]
-        elif dictionary_arguments.get("path") is not None and "path" in arg_names:
-            clean_args["path"] = dictionary_arguments["path"]
-        elif (
-            dictionary_arguments.get("file") is not None
-            and "path" in arg_names
-            and "file" not in arg_names
-        ):
-            clean_args["path"] = dictionary_arguments["file"]
+        if "path" in arg_names:
+            clean_args["path"] = browser_full_path(dictionary_arguments)
 
         self.load_args_from_dictionary(clean_args)
+        if dictionary_arguments.get("host"):
+            self.add_arg("host", dictionary_arguments["host"])
 
     async def parse_arguments(self) -> None:
         """CLI form: either a single path string, or a JSON object."""
@@ -79,13 +73,11 @@ class FileBrowserArguments(TaskArguments):
                     for k, v in data.items()
                     if k in arg_names and k not in ("host", "full_path")
                 }
-                if data.get("full_path") and "path" in arg_names:
-                    clean_args["path"] = data["full_path"]
-                elif "path" in data and "path" in arg_names:
-                    clean_args["path"] = data["path"]
-                elif "file" in data and "path" in arg_names and "file" not in arg_names:
-                    clean_args["path"] = data["file"]
+                if "path" in arg_names:
+                    clean_args["path"] = browser_full_path(data)
                 self.load_args_from_dictionary(clean_args)
+                if data.get("host"):
+                    self.add_arg("host", data["host"])
                 return
             except json.JSONDecodeError:
                 pass
@@ -151,6 +143,33 @@ def _strip_outer_quotes(token: str) -> str:
     if len(token) >= 2 and token[0] == token[-1] and token[0] in ("'", '"'):
         return token[1:-1]
     return token
+
+
+def browser_full_path(arguments: Dict[str, Any]) -> str:
+    """Normalize Mythic file-browser tasking into the agent's path argument."""
+    full_path = arguments.get("full_path")
+    if full_path:
+        return str(full_path)
+
+    parent = arguments.get("path")
+    name = arguments.get("file")
+    if parent is not None and name:
+        parent = str(parent)
+        name = str(name)
+        if not parent:
+            return name
+        if name.startswith(("/", "\\")) or (len(name) >= 2 and name[1] == ":"):
+            return name
+        sep = "\\" if "\\" in parent or (len(parent) >= 2 and parent[1] == ":") else "/"
+        if parent.endswith(("/", "\\")):
+            return parent + name
+        return parent + sep + name
+
+    if parent is not None:
+        return str(parent)
+    if name is not None:
+        return str(name)
+    return ""
 
 
 def error_aware_process_response(

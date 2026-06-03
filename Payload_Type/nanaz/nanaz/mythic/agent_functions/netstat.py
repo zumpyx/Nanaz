@@ -10,7 +10,8 @@ class NetstatArguments(TaskArguments):
         self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
-        pass
+        if self.command_line.strip():
+            raise Exception("netstat takes no arguments.")
 
 
 class NetstatCommand(CommandBase):
@@ -36,4 +37,5 @@ class NetstatCommand(CommandBase):
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:
-        return PTTaskProcessResponseMessageResponse(TaskID=task.Task.ID, Success=True)
+        from ._base import error_aware_process_response
+        return error_aware_process_response(task, response)

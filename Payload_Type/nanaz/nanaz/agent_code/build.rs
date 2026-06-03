@@ -67,7 +67,7 @@ fn main() {
     if cfg.exists() {
         println!("cargo:rerun-if-changed=config.json");
     } else {
-        // No file → materialise the placeholder so include_str! has
+        // No file: materialise the placeholder so include_str! has
         // something to embed. We deliberately do NOT set
         // rerun-if-changed for the freshly created file: by the time
         // cargo invokes include_str! below, the file already exists

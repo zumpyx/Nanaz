@@ -2,7 +2,11 @@ import json
 
 from mythic_container.MythicCommandBase import *
 
-from ._base import FileBrowserArguments, simple_command_attributes, split_cli_preserve_backslashes
+from ._base import (
+    FileBrowserArguments,
+    simple_command_attributes,
+    split_cli_preserve_backslashes,
+)
 
 
 class WgetArguments(FileBrowserArguments):
@@ -94,7 +98,7 @@ class WgetCommand(CommandBase):
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
         url = taskData.args.get_arg("url")
         path = taskData.args.get_arg("path")
-        response.DisplayParams = f"{url}" + (f" → {path}" if path else "")
+        response.DisplayParams = f"{url}" + (f" -> {path}" if path else "")
         return response
 
     async def process_response(self, task: PTTaskMessageAllData, response: any) -> PTTaskProcessResponseMessageResponse:

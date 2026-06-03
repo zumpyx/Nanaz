@@ -10,7 +10,8 @@ class SysinfoArguments(TaskArguments):
         self.load_args_from_dictionary(dictionary_arguments)
 
     async def parse_arguments(self):
-        pass
+        if self.command_line.strip():
+            raise Exception("sysinfo takes no arguments.")
 
 
 class SysinfoCommand(CommandBase):

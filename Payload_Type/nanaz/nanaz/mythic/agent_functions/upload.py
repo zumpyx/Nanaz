@@ -1,5 +1,3 @@
-import base64
-
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 
@@ -37,7 +35,7 @@ class UploadCommand(CommandBase):
     cmd = "upload"
     needs_admin = False
     help_cmd = "upload [destination_path]"
-    description = "Upload a file to the target. File content is embedded as base64."
+    description = "Upload a file to the target using Mythic file chunk transfer."
     version = 1
     author = "@zumpyx"
     argument_class = UploadArguments
@@ -50,6 +48,8 @@ class UploadCommand(CommandBase):
 
         file_uuid = taskData.args.get_arg("file")
         dest_path = taskData.args.get_arg("path")
+        if not taskData.args.get_arg("host"):
+            taskData.args.add_arg("host", taskData.Callback.Host)
 
         try:
             file_search = await SendMythicRPCFileSearch(
@@ -61,21 +61,12 @@ class UploadCommand(CommandBase):
             original_filename = ""
             if file_search.Success and len(file_search.Files) > 0:
                 original_filename = file_search.Files[0].Filename
-            file_resp = await SendMythicRPCFileGetContent(
-                MythicRPCFileGetContentMessage(file_uuid)
-            )
-            if file_resp.Success and file_resp.Content is not None:
-                encoded = base64.b64encode(file_resp.Content).decode("utf-8")
-                taskData.args.add_arg("file_bytes", encoded)
-                if original_filename:
-                    taskData.args.add_arg("original_filename", original_filename)
-                taskData.args.remove_arg("file")
-                shown = dest_path or original_filename
-                response.DisplayParams = f"{shown} ({len(file_resp.Content)} bytes)"
-            else:
-                response.Success = False
-                response.Error = file_resp.Error or "Failed to fetch file content"
-                return response
+            taskData.args.add_arg("file_id", file_uuid)
+            if original_filename:
+                taskData.args.add_arg("original_filename", original_filename)
+            taskData.args.remove_arg("file")
+            shown = dest_path or original_filename or file_uuid
+            response.DisplayParams = f"{shown} ({file_uuid})"
         except Exception as e:
             response.Success = False
             response.Error = f"Error fetching upload file: {str(e)}"

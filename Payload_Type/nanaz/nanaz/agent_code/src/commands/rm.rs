@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use mythic::{RemovedFileInfo, TaskMessage, TaskResponse};
+use mythic::{Artifact, RemovedFileInfo, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
@@ -26,6 +26,8 @@ struct Params {
     /// `rm -r` regardless of the path being a system path.
     #[serde(default)]
     confirm_destructive: bool,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -74,8 +76,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     completed: Some(true),
                     status: Some("completed".into()),
                     user_output: Some(format!("removed {}", display_path(path))),
+                    artifacts: vec![Artifact {
+                        base_artifact: "FileDelete".into(),
+                        artifact: display_path(path),
+                        needs_cleanup: false,
+                        resolved: true,
+                    }],
                     removed_files: vec![RemovedFileInfo {
-                        host: String::new(),
+                        host: params.host.unwrap_or_default(),
                         path: display_path(path),
                     }],
                     ..Default::default()

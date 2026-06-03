@@ -115,7 +115,12 @@ class RmArguments(FileBrowserArguments):
         await super().parse_dictionary(dictionary_arguments)
         # File-browser delete = user has confirmed in UI. Auto-inject
         # the destructive confirmation so the Rust side accepts the op.
-        if not self.get_arg("confirm_destructive"):
+        from_file_browser = any(
+            key in dictionary_arguments for key in ("host", "full_path", "file")
+        )
+        if from_file_browser and not self.get_arg("recursive"):
+            self.set_arg("recursive", True)
+        if from_file_browser and not self.get_arg("confirm_destructive"):
             self.set_arg("confirm_destructive", True)
 
 
@@ -136,6 +141,8 @@ class RmCommand(CommandBase):
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
+        if not taskData.args.get_arg("host"):
+            taskData.args.add_arg("host", taskData.Callback.Host)
         path = taskData.args.get_arg("path")
         rec = taskData.args.get_arg("recursive")
         response.DisplayParams = f"{path}" + (" -r" if rec else "")

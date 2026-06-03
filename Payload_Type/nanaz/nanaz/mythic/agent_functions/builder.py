@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import shutil
+import tempfile
 import traceback
 
 from mythic_container.MythicCommandBase import *
@@ -144,12 +145,13 @@ class Nanaz(PayloadType):
                 if name == "http":
                     aes = params.pop("AESPSK", None)
                     params["aes_psk"] = aes.get("enc_key", "") if isinstance(aes, dict) else (aes or "")
+                    if params.get("encrypted_exchange_check"):
+                        raise Exception(
+                            "http encrypted_exchange_check is not implemented by nanaz"
+                        )
                 c2_profiles.append({name: params})
 
             config = {"payload_uuid": self.uuid, "c2_profiles": c2_profiles}
-            self.agent_code_path.mkdir(parents=True, exist_ok=True)
-            config_path = self.agent_code_path / "config.json"
-            config_path.write_text(json.dumps(config, indent=4))
 
             # --- compile ---
             triple = TARGETS[target_os]
@@ -159,35 +161,50 @@ class Nanaz(PayloadType):
             if not debug:
                 cargo_args.insert(1, "-r")
 
-            proc = await asyncio.create_subprocess_exec(
-                cargo,
-                *cargo_args,
-                cwd=str(self.agent_code_path),
-                env=_build_env(),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
+            with tempfile.TemporaryDirectory(prefix="nanaz-build-") as tmp:
+                build_root = pathlib.Path(tmp) / "agent_code"
+                shutil.copytree(
+                    self.agent_code_path,
+                    build_root,
+                    ignore=shutil.ignore_patterns(
+                        "target",
+                        "config.json",
+                        "__pycache__",
+                        "*.pyc",
+                    ),
+                )
+                config_path = build_root / "config.json"
+                config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
 
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                print(line.decode("utf-8", errors="ignore").rstrip(), flush=True)
-            await proc.wait()
+                proc = await asyncio.create_subprocess_exec(
+                    cargo,
+                    *cargo_args,
+                    cwd=str(build_root),
+                    env=_build_env(),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
 
-            if proc.returncode != 0:
-                raise Exception(f"cargo zigbuild failed (exit {proc.returncode})")
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    print(line.decode("utf-8", errors="ignore").rstrip(), flush=True)
+                await proc.wait()
 
-            # --- collect artifact ---
-            profile = "debug" if debug else "release"
-            binary = self.agent_code_path / "target" / triple / profile / "nanaz"
-            if target_os == "Windows":
-                binary = binary.with_suffix(".exe")
+                if proc.returncode != 0:
+                    raise Exception(f"cargo zigbuild failed (exit {proc.returncode})")
 
-            if not binary.exists():
-                raise Exception(f"binary not found: {binary}")
+                # --- collect artifact ---
+                profile = "debug" if debug else "release"
+                binary = build_root / "target" / triple / profile / "nanaz"
+                if target_os == "Windows":
+                    binary = binary.with_suffix(".exe")
 
-            resp.payload = binary.read_bytes()
+                if not binary.exists():
+                    raise Exception(f"binary not found: {binary}")
+
+                resp.payload = binary.read_bytes()
 
             # --- finalize ---
             name = pathlib.Path(self.filename).stem
