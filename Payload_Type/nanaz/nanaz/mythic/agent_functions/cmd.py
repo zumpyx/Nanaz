@@ -29,6 +29,7 @@ class CmdCommand(CommandBase):
     author = "@zumpyx"
     argument_class = CmdArguments
     attackmapping = ["T1059.003"]
+    supported_ui_features = ["shell", "shell:cmd", "execute:shell"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows],

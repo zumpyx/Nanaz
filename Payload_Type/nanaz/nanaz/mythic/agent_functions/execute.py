@@ -41,6 +41,7 @@ class ExecuteCommand(CommandBase):
     author = "@zumpyx"
     argument_class = ExecuteArguments
     attackmapping = ["T1106"]
+    supported_ui_features = ["execute", "execute:process"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],

@@ -41,6 +41,7 @@ class PowerPickCommand(CommandBase):
     author = "@zumpyx"
     argument_class = PowerPickArguments
     attackmapping = ["T1059.001"]
+    supported_ui_features = ["powerpick", "execute:powershell", "execute:dotnet"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows],

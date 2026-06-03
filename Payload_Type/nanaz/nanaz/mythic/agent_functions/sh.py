@@ -29,6 +29,7 @@ class ShCommand(CommandBase):
     author = "@zumpyx"
     argument_class = ShArguments
     attackmapping = ["T1059.004"]
+    supported_ui_features = ["shell", "shell:sh", "execute:shell"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Linux],

@@ -58,7 +58,7 @@ class TreeCommand(CommandBase):
     author = "@zumpyx"
     argument_class = TreeArguments
     attackmapping = ["T1083"]
-    supported_ui_features = []
+    supported_ui_features = ["file_browser:tree"]
     browser_script = None
     attributes = simple_command_attributes()
 

@@ -189,6 +189,7 @@ class ExecuteAssemblyCommand(CommandBase):
     author = "@zumpyx"
     argument_class = ExecuteAssemblyArguments
     attackmapping = ["T1059"]
+    supported_ui_features = ["execute", "execute:assembly", "execute:dotnet"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows],

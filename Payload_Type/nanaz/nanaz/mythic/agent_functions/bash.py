@@ -29,6 +29,7 @@ class BashCommand(CommandBase):
     author = "@zumpyx"
     argument_class = BashArguments
     attackmapping = ["T1059.004"]
+    supported_ui_features = ["shell", "shell:bash", "execute:shell"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Linux],

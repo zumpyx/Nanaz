@@ -29,6 +29,7 @@ class PowerShellCommand(CommandBase):
     author = "@zumpyx"
     argument_class = PowerShellArguments
     attackmapping = ["T1059.001"]
+    supported_ui_features = ["shell", "shell:powershell", "execute:shell"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Windows],
