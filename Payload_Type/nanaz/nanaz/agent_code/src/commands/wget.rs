@@ -25,10 +25,6 @@ struct Params {
     /// Optional override for the byte cap. Clamped to [1, MAX_WGET_BYTES].
     #[serde(default)]
     max_bytes: Option<u64>,
-    /// Compatibility field from the old ureq backend. minreq 2.x does not
-    /// expose a stable API for disabling certificate verification.
-    #[serde(default)]
-    insecure_skip_tls_verify: bool,
     /// When true, allows writing into protected system paths.
     #[serde(default)]
     allow_system_path: bool,
@@ -96,14 +92,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
     let mut writer = std::io::BufWriter::new(file);
 
-    let result = http_get_to_writer(
-        &params.url,
-        None,
-        None,
-        params.insecure_skip_tls_verify,
-        cap,
-        &mut writer,
-    );
+    let result = http_get_to_writer(&params.url, None, None, false, cap, &mut writer);
     let n = match result {
         Ok(n) => n,
         Err(e) => {
