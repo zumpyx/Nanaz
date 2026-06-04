@@ -232,6 +232,16 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
         };
 
         let file_id = meta.file_id.expect("checked above");
+        if let Some(receipt_file_id) = receipt.file_id
+            && receipt_file_id != file_id
+        {
+            out.push(TaskResponse::failed(
+                receipt.task_id,
+                "download receipt file_id did not match registered Mythic file",
+            ));
+            continue;
+        }
+
         let chunk_num = meta.next_chunk;
         let response = next_download_chunk(&meta, file_id, chunk_num);
         let completed =
@@ -438,6 +448,48 @@ mod tests {
                 .and_then(|d| d.chunk_data.as_deref()),
             Some("dGhyZWFkZWQgZG93bmxvYWQ=")
         );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_download_rejects_mismatched_file_id_receipt() {
+        let path = temp_file("bad_file_id.bin");
+        let data = vec![b'x'; MIN_CHUNK_SIZE as usize + 1];
+        std::fs::write(&path, &data).unwrap();
+
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "download".into(),
+            parameters: serde_json::json!({
+                "path": path.to_string_lossy(),
+                "chunk_size": MIN_CHUNK_SIZE,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let file_id = Uuid::new_v4();
+
+        let registration = handle(&task);
+        assert_eq!(registration.status.as_deref(), Some("processing"));
+
+        let first = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            ..Default::default()
+        }]);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].completed, Some(false));
+
+        let second = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(Uuid::new_v4()),
+            ..Default::default()
+        }]);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].status.as_deref(), Some("error"));
 
         let _ = std::fs::remove_file(path);
     }
