@@ -10,6 +10,8 @@
 //!
 //! Response: `TaskResponse.processes` with a `Vec<ProcessEntry>`.
 
+use std::collections::{HashMap, HashSet};
+
 use mythic::{ProcessEntry, TaskMessage, TaskResponse};
 use serde::Deserialize;
 #[cfg(windows)]
@@ -104,7 +106,7 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
         };
         let fields: Vec<&str> = rest.split_whitespace().collect();
 
-        let ppid: Option<i64> = fields.first().and_then(|s| s.parse().ok());
+        let ppid: Option<i64> = fields.get(1).and_then(|s| s.parse().ok());
         // starttime is at field index 19 (0-based after comm+state removal:
         // state is field 0, then ppid=1, ..., starttime=19). The value is
         // in `_SC_CLK_TCK` units; convert to milliseconds using the live
@@ -168,6 +170,37 @@ fn list_processes() -> Result<Vec<ProcessEntry>, String> {
     }
 
     Ok(procs)
+}
+
+fn normalize_process_tree(procs: &mut Vec<ProcessEntry>) {
+    let mut seen = HashSet::new();
+    procs.retain(|p| p.process_id > 0 && seen.insert(p.process_id));
+
+    let ids = procs.iter().map(|p| p.process_id).collect::<HashSet<_>>();
+    for p in procs.iter_mut() {
+        if let Some(ppid) = p.parent_process_id
+            && (ppid <= 0 || ppid == p.process_id || !ids.contains(&ppid))
+        {
+            p.parent_process_id = None;
+        }
+    }
+
+    let parent_by_pid = procs
+        .iter()
+        .filter_map(|p| p.parent_process_id.map(|ppid| (p.process_id, ppid)))
+        .collect::<HashMap<_, _>>();
+    for p in procs.iter_mut() {
+        let mut ancestors = HashSet::new();
+        ancestors.insert(p.process_id);
+        let mut cursor = p.process_id;
+        while let Some(parent) = parent_by_pid.get(&cursor).copied() {
+            if !ancestors.insert(parent) {
+                p.parent_process_id = None;
+                break;
+            }
+            cursor = parent;
+        }
+    }
 }
 
 // ── macOS: use ps command ───────────────────────────────────
@@ -434,6 +467,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                     p.host = process_host();
                 }
             }
+            normalize_process_tree(&mut procs);
 
             // BrowserScript receives normal response text, not only the
             // structured `processes` hook. Mirror Apollo by putting the
@@ -512,5 +546,70 @@ mod tests {
         let resp = handle(&task);
         assert!(!resp.processes.is_empty());
         assert!(resp.processes.iter().all(|p| !p.update_deleted));
+    }
+
+    #[test]
+    fn test_normalize_process_tree_removes_bad_edges() {
+        let mut procs = vec![
+            ProcessEntry {
+                process_id: 1,
+                name: "init".into(),
+                parent_process_id: Some(0),
+                ..Default::default()
+            },
+            ProcessEntry {
+                process_id: 2,
+                name: "self-parent".into(),
+                parent_process_id: Some(2),
+                ..Default::default()
+            },
+            ProcessEntry {
+                process_id: 2,
+                name: "duplicate".into(),
+                parent_process_id: Some(1),
+                ..Default::default()
+            },
+            ProcessEntry {
+                process_id: 3,
+                name: "missing-parent".into(),
+                parent_process_id: Some(9999),
+                ..Default::default()
+            },
+        ];
+
+        normalize_process_tree(&mut procs);
+
+        assert_eq!(procs.len(), 3);
+        assert_eq!(procs[0].parent_process_id, None);
+        assert_eq!(procs[1].parent_process_id, None);
+        assert_eq!(procs[2].parent_process_id, None);
+    }
+
+    #[test]
+    fn test_normalize_process_tree_breaks_cycles() {
+        let mut procs = vec![
+            ProcessEntry {
+                process_id: 10,
+                name: "a".into(),
+                parent_process_id: Some(11),
+                ..Default::default()
+            },
+            ProcessEntry {
+                process_id: 11,
+                name: "b".into(),
+                parent_process_id: Some(12),
+                ..Default::default()
+            },
+            ProcessEntry {
+                process_id: 12,
+                name: "c".into(),
+                parent_process_id: Some(10),
+                ..Default::default()
+            },
+        ];
+
+        normalize_process_tree(&mut procs);
+
+        assert!(procs.iter().any(|p| p.parent_process_id.is_none()));
     }
 }
