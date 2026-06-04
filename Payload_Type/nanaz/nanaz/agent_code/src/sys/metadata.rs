@@ -123,7 +123,7 @@ pub fn external_ip() -> Option<String> {
     if !EXTERNAL_IP_CHECK.load(Ordering::Acquire) {
         return None;
     }
-    crate::sys::network::http_request("https://api.ipify.org", "GET", None, None, None, true)
+    crate::sys::network::http_request("https://api.ipify.org", "GET", None, None, None)
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())

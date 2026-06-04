@@ -92,7 +92,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
     let mut writer = std::io::BufWriter::new(file);
 
-    let result = http_get_to_writer(&params.url, None, None, false, cap, &mut writer);
+    let result = http_get_to_writer(&params.url, None, None, cap, &mut writer);
     let n = match result {
         Ok(n) => n,
         Err(e) => {
