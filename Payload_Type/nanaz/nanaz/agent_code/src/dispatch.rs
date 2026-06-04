@@ -76,7 +76,7 @@ pub fn responses_from_post_response_receipts(
     out
 }
 
-fn command_uses_process_cwd(command: &str) -> bool {
+pub fn command_uses_process_cwd(command: &str) -> bool {
     matches!(
         command,
         "cat"
