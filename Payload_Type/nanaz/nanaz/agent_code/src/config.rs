@@ -12,6 +12,7 @@ pub struct Config {
 pub enum ConfigError {
     Parse(String),
     Empty { reason: &'static str },
+    Unsupported { reason: &'static str },
     InvalidPsk { reason: String },
 }
 
@@ -20,6 +21,12 @@ impl core::fmt::Display for ConfigError {
         match self {
             ConfigError::Parse(e) => write!(f, "embedded config.json invalid: {e}"),
             ConfigError::Empty { reason } => write!(f, "embedded config.json unusable: {reason}"),
+            ConfigError::Unsupported { reason } => {
+                write!(
+                    f,
+                    "embedded config.json uses unsupported settings: {reason}"
+                )
+            }
             ConfigError::InvalidPsk { reason } => {
                 write!(f, "embedded config.json has invalid PSK: {reason}")
             }
@@ -47,6 +54,11 @@ impl Config {
                 reason: "no c2_profiles configured",
             });
         }
+        if parsed.c2_profiles.len() != 1 {
+            return Err(ConfigError::Unsupported {
+                reason: "exactly one http C2 profile is supported",
+            });
+        }
         // PSK validation. Mythic generates a 32-byte base64 AES key per
         // payload; rejecting malformed keys at load time means a typo
         // surfaces as "refusing to start" instead of a confusing AES error
@@ -65,4 +77,58 @@ fn test_load_config() {
     // will fail the validation checks; we only assert the function does
     // not panic on the whatever-the-developer-has-checked-in JSON.
     let _ = Config::load_json(RAW_JSON);
+}
+
+#[test]
+fn rejects_multiple_c2_profiles() {
+    let raw = r#"{
+        "payload_uuid": "11111111-1111-4111-8111-111111111111",
+        "c2_profiles": [
+            {
+                "http": {
+                    "aes_psk": null,
+                    "callback_host": "http://127.0.0.1",
+                    "callback_interval": 10,
+                    "callback_jitter": 0,
+                    "callback_port": 80,
+                    "encrypted_exchange_check": false,
+                    "get_uri": "index",
+                    "headers": {},
+                    "killdate": "",
+                    "post_uri": "data",
+                    "proxy_host": "",
+                    "proxy_pass": "",
+                    "proxy_port": "",
+                    "proxy_user": "",
+                    "query_path_name": "q",
+                    "external_ip_check": false
+                }
+            },
+            {
+                "http": {
+                    "aes_psk": null,
+                    "callback_host": "http://127.0.0.2",
+                    "callback_interval": 10,
+                    "callback_jitter": 0,
+                    "callback_port": 80,
+                    "encrypted_exchange_check": false,
+                    "get_uri": "index",
+                    "headers": {},
+                    "killdate": "",
+                    "post_uri": "data",
+                    "proxy_host": "",
+                    "proxy_pass": "",
+                    "proxy_port": "",
+                    "proxy_user": "",
+                    "query_path_name": "q",
+                    "external_ip_check": false
+                }
+            }
+        ]
+    }"#;
+
+    assert!(matches!(
+        Config::load_json(raw),
+        Err(ConfigError::Unsupported { .. })
+    ));
 }

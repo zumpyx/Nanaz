@@ -117,8 +117,8 @@ class Nanaz(PayloadType):
     c2_profiles = ["http"]
     note = f"Cross-platform Rust agent. Version: {semver}."
     supports_dynamic_loading = False
-    supports_multiple_c2_instances_in_build = True
-    supports_multiple_c2_in_build = True
+    supports_multiple_c2_instances_in_build = False
+    supports_multiple_c2_in_build = False
 
     build_parameters = [
         BuildParameter(
@@ -146,6 +146,11 @@ class Nanaz(PayloadType):
             else:
                 raise Exception(
                     f"unsupported selected_os '{selected}'; only Windows and Linux are supported"
+                )
+
+            if len(self.c2info) != 1:
+                raise Exception(
+                    "nanaz supports exactly one http C2 profile per payload build"
                 )
 
             # --- config.json ---
