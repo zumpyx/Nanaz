@@ -2,7 +2,7 @@ use core::sync::atomic::Ordering;
 use std::panic::catch_unwind;
 use std::sync::{
     Arc, Mutex,
-    mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError},
 };
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -28,6 +28,8 @@ use crate::{
 
 const TASK_WORKER_THREADS: usize = 4;
 const CWD_TASK_WORKER_THREADS: usize = 1;
+const TASK_QUEUE_CAPACITY: usize = 32;
+const CWD_TASK_QUEUE_CAPACITY: usize = 32;
 const MAX_POST_RESPONSE_DRAIN_CYCLES: usize = 10_000;
 
 struct CompletedTask {
@@ -65,9 +67,10 @@ fn is_control_task(command: &str) -> bool {
 
 fn start_task_workers(
     worker_count: usize,
+    queue_capacity: usize,
     completed_tx: Sender<CompletedTask>,
-) -> Sender<mythic::TaskMessage> {
-    let (task_tx, task_rx) = mpsc::channel::<mythic::TaskMessage>();
+) -> SyncSender<mythic::TaskMessage> {
+    let (task_tx, task_rx) = mpsc::sync_channel::<mythic::TaskMessage>(queue_capacity.max(1));
     let task_rx = Arc::new(Mutex::new(task_rx));
 
     for _ in 0..worker_count.max(1) {
@@ -90,6 +93,31 @@ fn start_task_workers(
     }
 
     task_tx
+}
+
+fn queue_task_or_fail(
+    task: mythic::TaskMessage,
+    task_tx: &SyncSender<mythic::TaskMessage>,
+    completed_tx: &Sender<CompletedTask>,
+) -> MythicResult<()> {
+    match task_tx.try_send(task) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(task)) => {
+            let command = task.command.clone();
+            let response = TaskResponse::failed(
+                task.id,
+                "agent task queue is full; retry after current tasks complete",
+            );
+            let _ = completed_tx.send(CompletedTask {
+                command,
+                responses: vec![response],
+            });
+            Ok(())
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            Err(MythicError::protocol("task worker queue closed"))
+        }
+    }
 }
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
@@ -377,8 +405,16 @@ pub fn run(config: Config) -> MythicResult<()> {
     let mut rng = rand::thread_rng();
     let mut pending: Vec<TaskResponse> = Vec::new();
     let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
-    let task_tx = start_task_workers(TASK_WORKER_THREADS, completed_tx.clone());
-    let cwd_task_tx = start_task_workers(CWD_TASK_WORKER_THREADS, completed_tx.clone());
+    let task_tx = start_task_workers(
+        TASK_WORKER_THREADS,
+        TASK_QUEUE_CAPACITY,
+        completed_tx.clone(),
+    );
+    let cwd_task_tx = start_task_workers(
+        CWD_TASK_WORKER_THREADS,
+        CWD_TASK_QUEUE_CAPACITY,
+        completed_tx.clone(),
+    );
     let mut next_tasking_at = Instant::now() + next_beacon_delay();
 
     loop {
@@ -425,16 +461,10 @@ pub fn run(config: Config) -> MythicResult<()> {
                         continue;
                     }
 
-                    let send_result = if dispatch::command_uses_process_cwd(&task.command) {
-                        cwd_task_tx.send(task)
+                    if dispatch::command_uses_process_cwd(&task.command) {
+                        queue_task_or_fail(task, &cwd_task_tx, &completed_tx)?;
                     } else {
-                        task_tx.send(task)
-                    };
-                    if let Err(e) = send_result {
-                        if DEBUG.load(Ordering::Relaxed) {
-                            eprintln!("[!] task worker queue closed: {e}");
-                        }
-                        return Err(MythicError::protocol("task worker queue closed"));
+                        queue_task_or_fail(task, &task_tx, &completed_tx)?;
                     }
                 }
                 next_tasking_at = Instant::now() + next_beacon_delay();
@@ -457,7 +487,7 @@ mod tests {
     #[test]
     fn task_workers_dispatch_queued_tasks() {
         let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
-        let task_tx = start_task_workers(TASK_WORKER_THREADS, completed_tx);
+        let task_tx = start_task_workers(TASK_WORKER_THREADS, TASK_QUEUE_CAPACITY, completed_tx);
         let mut ids = HashSet::new();
 
         for i in 0..(TASK_WORKER_THREADS + 3) {
@@ -492,5 +522,32 @@ mod tests {
         assert!(is_control_task("exit"));
         assert!(!is_control_task("shell"));
         assert!(!is_control_task("download"));
+    }
+
+    #[test]
+    fn full_task_queue_returns_task_failure() {
+        let (task_tx, _task_rx) = mpsc::sync_channel::<mythic::TaskMessage>(0);
+        let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
+        let task_id = Uuid::new_v4();
+
+        queue_task_or_fail(
+            mythic::TaskMessage {
+                id: task_id,
+                command: "ps".into(),
+                parameters: "{}".into(),
+                ..Default::default()
+            },
+            &task_tx,
+            &completed_tx,
+        )
+        .unwrap();
+
+        let completed = completed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("full queue should emit a failed task response");
+        assert_eq!(completed.command, "ps");
+        assert_eq!(completed.responses.len(), 1);
+        assert_eq!(completed.responses[0].task_id, task_id);
+        assert_eq!(completed.responses[0].status.as_deref(), Some("error"));
     }
 }
