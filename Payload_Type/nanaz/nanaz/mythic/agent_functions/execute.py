@@ -3,6 +3,7 @@ from mythic_container.MythicCommandBase import *
 from ._base import (
     error_aware_process_response,
     read_cli_token,
+    validate_timeout,
 )
 
 
@@ -54,6 +55,13 @@ class ExecuteCommand(CommandBase):
         path = taskData.args.get_arg("path")
         arguments = taskData.args.get_arg("arguments")
         timeout = taskData.args.get_arg("timeout")
+        timeout_error = validate_timeout(timeout)
+        if timeout_error:
+            return PTTaskCreateTaskingMessageResponse(
+                TaskID=taskData.Task.ID,
+                Success=False,
+                Error=timeout_error,
+            )
         display = path if not arguments else f"{path} {arguments}"
         return PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,

@@ -193,3 +193,11 @@ def error_aware_process_response(
             user_output = response.get("user_output") or "agent reported an error"
             resp.Error = user_output
     return resp
+
+
+def validate_timeout(timeout: int | None, max_seconds: int = 3600) -> str | None:
+    if timeout is None:
+        return None
+    if timeout < 1 or timeout > max_seconds:
+        return f"timeout must be between 1 and {max_seconds} seconds."
+    return None

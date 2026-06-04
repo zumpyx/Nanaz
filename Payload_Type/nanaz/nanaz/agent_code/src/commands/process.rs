@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::sys::encoding::decode_output;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
+const MAX_TIMEOUT_SECS: u64 = 60 * 60;
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -157,6 +158,13 @@ fn run_child(
     label: &str,
     display_command: &str,
 ) -> TaskResponse {
+    if timeout_secs == 0 || timeout_secs > MAX_TIMEOUT_SECS {
+        return TaskResponse::failed(
+            task_id,
+            &format!("timeout must be between 1 and {MAX_TIMEOUT_SECS} seconds"),
+        );
+    }
+
     let mut command = Command::new(bin);
     command
         .args(&args)
@@ -179,7 +187,7 @@ fn run_child(
     };
 
     let child_id = child.id();
-    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let timeout = Duration::from_secs(timeout_secs);
     let Some(stdout) = child.stdout.take() else {
         return TaskResponse::failed(task_id, &format!("{label} stdout pipe unavailable"));
     };
@@ -319,5 +327,45 @@ mod tests {
                     .contains("[exit code: 7]")
             );
         }
+    }
+
+    #[test]
+    fn test_shell_rejects_zero_timeout() {
+        #[cfg(not(windows))]
+        {
+            let task = TaskMessage {
+                command: "sh".into(),
+                parameters: r#"{"command":"echo hi","timeout":0}"#.into(),
+                ..Default::default()
+            };
+            let resp = handle_shell(&task, ShellKind::Sh);
+            assert_eq!(resp.status.as_deref(), Some("error"));
+            assert!(
+                resp.user_output
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("timeout must be between")
+            );
+        }
+    }
+
+    #[test]
+    fn test_execute_rejects_excessive_timeout_before_spawn() {
+        let task = TaskMessage {
+            command: "execute".into(),
+            parameters: format!(
+                r#"{{"path":"definitely-not-a-real-binary","timeout":{}}}"#,
+                MAX_TIMEOUT_SECS + 1
+            ),
+            ..Default::default()
+        };
+        let resp = handle_execute(&task);
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert!(
+            resp.user_output
+                .as_deref()
+                .unwrap_or_default()
+                .contains("timeout must be between")
+        );
     }
 }

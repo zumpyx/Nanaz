@@ -1,6 +1,6 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import error_aware_process_response
+from ._base import error_aware_process_response, validate_timeout
 
 
 class ShArguments(TaskArguments):
@@ -41,6 +41,13 @@ class ShCommand(CommandBase):
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         command = taskData.args.get_arg("command")
         timeout = taskData.args.get_arg("timeout")
+        timeout_error = validate_timeout(timeout)
+        if timeout_error:
+            return PTTaskCreateTaskingMessageResponse(
+                TaskID=taskData.Task.ID,
+                Success=False,
+                Error=timeout_error,
+            )
         return PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,
             Success=True,
