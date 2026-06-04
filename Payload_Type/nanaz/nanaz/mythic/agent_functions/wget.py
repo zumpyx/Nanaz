@@ -34,7 +34,11 @@ class WgetArguments(FileBrowserArguments):
             CommandParameter(
                 name="insecure_skip_tls_verify",
                 type=ParameterType.Boolean,
-                default_value=True,
+                default_value=False,
+                description=(
+                    "Compatibility option only; the minreq backend always "
+                    "uses strict TLS certificate verification."
+                ),
             ),
             CommandParameter(
                 name="allow_system_path",

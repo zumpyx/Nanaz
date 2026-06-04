@@ -1,10 +1,9 @@
-//! Download a file from a URL — cross-platform via ureq.
+//! Download a file from a URL — cross-platform via minreq.
 //!
 //! Streams the body to disk (capped at `MAX_WGET_BYTES`) so the agent does
 //! not OOM on a runaway server, and so a 4 GiB dropper doesn't sit in RAM
-//! before the first `write`. TLS verification follows the parameter — by
-//! default we mirror `upload`'s stance and accept self-signed C2 certs, but
-//! operators can set `insecure_skip_tls_verify=false` for monitored networks.
+//! before the first `write`. TLS verification is strict with the minreq
+//! backend.
 
 use std::path::Path;
 
@@ -26,8 +25,8 @@ struct Params {
     /// Optional override for the byte cap. Clamped to [1, MAX_WGET_BYTES].
     #[serde(default)]
     max_bytes: Option<u64>,
-    /// When true, skip TLS certificate verification (default true for
-    /// self-signed C2 certs; set false in monitored networks).
+    /// Compatibility field from the old ureq backend. minreq 2.x does not
+    /// expose a stable API for disabling certificate verification.
     #[serde(default = "default_true")]
     insecure_skip_tls_verify: bool,
     /// When true, allows writing into protected system paths.

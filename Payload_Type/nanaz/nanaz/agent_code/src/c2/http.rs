@@ -27,9 +27,9 @@ pub struct HttpProfile {
     pub proxy_port: String,
     pub proxy_user: String,
     pub query_path_name: String,
-    /// When true, skip TLS certificate verification (default for C2 self-signed
-    /// certs). Set to false in production / over monitored networks to detect
-    /// MITM via cert chain mismatches.
+    /// Compatibility field from the old ureq backend. The minreq backend uses
+    /// strict rustls/webpki verification and does not support disabling
+    /// certificate checks.
     #[serde(default = "default_true")]
     pub insecure_skip_tls_verify: bool,
     /// When true, query icanhazip.com (over HTTPS) at check-in to populate
