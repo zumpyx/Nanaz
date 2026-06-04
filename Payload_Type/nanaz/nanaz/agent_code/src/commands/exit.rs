@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::{EXIT_PROCESS, SHOULD_EXIT};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Params {
     /// "process" terminates the entire agent process after flushing the
     /// pending response.
@@ -18,9 +19,16 @@ fn default_method() -> String {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
-    let method = serde_json::from_str::<Params>(&task.parameters)
-        .map(|p| p.method)
-        .unwrap_or_else(|_| default_method());
+    let parameters = task.parameters.trim();
+    let parameters = if parameters.is_empty() {
+        "{}"
+    } else {
+        parameters
+    };
+    let method = match serde_json::from_str::<Params>(parameters) {
+        Ok(p) => p.method,
+        Err(e) => return TaskResponse::failed(task.id, &format!("exit parse error: {e}")),
+    };
 
     match method.as_str() {
         "process" => {
@@ -48,5 +56,49 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             }
         }
         other => TaskResponse::failed(task.id, &format!("unknown exit method: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{EXIT_PROCESS, SHOULD_EXIT};
+
+    fn reset_exit_flags() {
+        SHOULD_EXIT.store(false, Ordering::Relaxed);
+        EXIT_PROCESS.store(false, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn malformed_exit_parameters_do_not_exit() {
+        reset_exit_flags();
+        let task = TaskMessage {
+            command: "exit".into(),
+            parameters: "{not-json".into(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert!(!SHOULD_EXIT.load(Ordering::Relaxed));
+        assert!(!EXIT_PROCESS.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn empty_exit_parameters_default_to_process_exit() {
+        reset_exit_flags();
+        let task = TaskMessage {
+            command: "exit".into(),
+            parameters: "".into(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(SHOULD_EXIT.load(Ordering::Relaxed));
+        assert!(EXIT_PROCESS.load(Ordering::Relaxed));
+        reset_exit_flags();
     }
 }
