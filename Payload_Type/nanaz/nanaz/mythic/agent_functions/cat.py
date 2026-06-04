@@ -23,6 +23,12 @@ class CatArguments(FileBrowserArguments):
                 type=ParameterType.Boolean,
                 default_value=False,
             ),
+            CommandParameter(
+                name="max_bytes",
+                type=ParameterType.Number,
+                default_value=16777216,
+                description="Maximum file size to return fully before showing head/tail.",
+            ),
         ]
 
 
