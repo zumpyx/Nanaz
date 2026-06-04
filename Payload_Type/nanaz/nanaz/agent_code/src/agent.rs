@@ -27,6 +27,7 @@ use crate::{
 // ── Helpers ─────────────────────────────────────────────
 
 const TASK_WORKER_THREADS: usize = 4;
+const MAX_POST_RESPONSE_DRAIN_CYCLES: usize = 10_000;
 
 struct CompletedTask {
     command: String,
@@ -185,13 +186,16 @@ fn post_pending_until_drained<C: C2Transport>(
     c2: &C,
     pending: &mut Vec<TaskResponse>,
 ) -> MythicResult<()> {
-    for _ in 0..8 {
+    for _ in 0..MAX_POST_RESPONSE_DRAIN_CYCLES {
         if pending.is_empty() {
             return Ok(());
         }
         post_pending_once(mythic, c2, pending)?;
     }
-    Ok(())
+    Err(MythicError::protocol(format!(
+        "post_response drain exceeded {MAX_POST_RESPONSE_DRAIN_CYCLES} cycles with {} response(s) still pending",
+        pending.len()
+    )))
 }
 
 fn flush_pending<C: C2Transport>(mythic: &MythicAgent, c2: &C, mut pending: Vec<TaskResponse>) {
