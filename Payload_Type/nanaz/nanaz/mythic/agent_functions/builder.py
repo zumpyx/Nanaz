@@ -105,7 +105,7 @@ class Nanaz(PayloadType):
     # in the operator UI.
     c2_profiles = ["http"]
     note = f"Cross-platform Rust agent. Version: {semver}."
-    supports_dynamic_loading = True
+    supports_dynamic_loading = False
     supports_multiple_c2_instances_in_build = True
     supports_multiple_c2_in_build = True
 
