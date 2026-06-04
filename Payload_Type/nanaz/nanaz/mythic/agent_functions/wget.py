@@ -32,15 +32,6 @@ class WgetArguments(FileBrowserArguments):
                 default_value=268435456,
             ),
             CommandParameter(
-                name="insecure_skip_tls_verify",
-                type=ParameterType.Boolean,
-                default_value=False,
-                description=(
-                    "Compatibility option only; the minreq backend always "
-                    "uses strict TLS certificate verification."
-                ),
-            ),
-            CommandParameter(
                 name="allow_system_path",
                 type=ParameterType.Boolean,
                 default_value=False,
@@ -61,7 +52,7 @@ class WgetArguments(FileBrowserArguments):
             self.set_arg("url", data["url"])
             if data.get("path"):
                 self.set_arg("path", data["path"])
-            for key in ("max_bytes", "insecure_skip_tls_verify", "allow_system_path"):
+            for key in ("max_bytes", "allow_system_path"):
                 if key in data:
                     self.set_arg(key, data[key])
             return

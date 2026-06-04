@@ -27,15 +27,11 @@ struct Params {
     max_bytes: Option<u64>,
     /// Compatibility field from the old ureq backend. minreq 2.x does not
     /// expose a stable API for disabling certificate verification.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     insecure_skip_tls_verify: bool,
     /// When true, allows writing into protected system paths.
     #[serde(default)]
     allow_system_path: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Extract a filename from a URL path, or fall back to "download".

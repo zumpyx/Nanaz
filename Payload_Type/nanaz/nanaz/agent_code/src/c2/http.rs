@@ -30,17 +30,13 @@ pub struct HttpProfile {
     /// Compatibility field from the old ureq backend. The minreq backend uses
     /// strict rustls/webpki verification and does not support disabling
     /// certificate checks.
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub insecure_skip_tls_verify: bool,
     /// When true, query icanhazip.com (over HTTPS) at check-in to populate
     /// the callback's external_ip field. Off by default — the egress is a
     /// strong blue-team indicator.
     #[serde(default)]
     pub external_ip_check: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Percent-encode bytes that aren't URL-safe.
