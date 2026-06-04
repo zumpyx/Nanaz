@@ -23,9 +23,11 @@
 //! removed it to stop the tasking panel from prompting for it on
 //! every `download`.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
 use mythic::{Artifact, TaskDownload, TaskMessage, TaskResponse};
@@ -71,9 +73,16 @@ struct DownloadMeta {
     next_chunk: u32,
 }
 
-thread_local! {
-    static PENDING_DOWNLOADS: std::cell::RefCell<std::collections::HashMap<Uuid, DownloadMeta>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+static PENDING_DOWNLOADS: OnceLock<Mutex<HashMap<Uuid, DownloadMeta>>> = OnceLock::new();
+
+fn pending_downloads() -> &'static Mutex<HashMap<Uuid, DownloadMeta>> {
+    PENDING_DOWNLOADS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pending_downloads_lock() -> std::sync::MutexGuard<'static, HashMap<Uuid, DownloadMeta>> {
+    pending_downloads()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn download_chunk_response(
@@ -188,11 +197,10 @@ fn next_download_chunk(meta: &DownloadMeta, file_id: Uuid, chunk_num: u32) -> Ta
 pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResponse> {
     let mut out = Vec::new();
     for receipt in receipts {
-        let mut meta =
-            match PENDING_DOWNLOADS.with(|cell| cell.borrow_mut().remove(&receipt.task_id)) {
-                Some(meta) => meta,
-                None => continue,
-            };
+        let mut meta = match pending_downloads_lock().remove(&receipt.task_id) {
+            Some(meta) => meta,
+            None => continue,
+        };
 
         if let Some(error) = &receipt.error {
             out.push(TaskResponse::failed(
@@ -231,9 +239,7 @@ pub fn responses_from_receipts(receipts: &[PostResponseReceipt]) -> Vec<TaskResp
         out.push(response);
         if !completed {
             meta.next_chunk += 1;
-            PENDING_DOWNLOADS.with(|cell| {
-                cell.borrow_mut().insert(meta.task_id, meta);
-            });
+            pending_downloads_lock().insert(meta.task_id, meta);
         }
     }
     out
@@ -322,9 +328,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         file_id: None,
         next_chunk: 1,
     };
-    PENDING_DOWNLOADS.with(|cell| {
-        cell.borrow_mut().insert(task.id, download_meta);
-    });
+    pending_downloads_lock().insert(task.id, download_meta);
 
     // Registration response. Mythic returns the authoritative file_id in the
     // post_response receipt; chunks are generated only after that receipt.
@@ -374,6 +378,7 @@ mod tests {
         let path = temp_file("empty.bin");
         std::fs::write(&path, b"").unwrap();
         let task = TaskMessage {
+            id: Uuid::new_v4(),
             command: "download".into(),
             parameters: serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
             ..Default::default()
@@ -403,6 +408,41 @@ mod tests {
     }
 
     #[test]
+    fn test_download_pending_state_crosses_worker_threads() {
+        let path = temp_file("threaded.bin");
+        std::fs::write(&path, b"threaded download").unwrap();
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "download".into(),
+            parameters: serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
+            ..Default::default()
+        };
+        let task_id = task.id;
+
+        let registration = std::thread::spawn(move || handle(&task)).join().unwrap();
+        assert_eq!(registration.status.as_deref(), Some("processing"));
+
+        let chunks = responses_from_receipts(&[PostResponseReceipt {
+            task_id,
+            status: "success".into(),
+            file_id: Some(Uuid::new_v4()),
+            error: None,
+            ..Default::default()
+        }]);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].completed, Some(true));
+        assert_eq!(
+            chunks[0]
+                .download
+                .as_ref()
+                .and_then(|d| d.chunk_data.as_deref()),
+            Some("dGhyZWFkZWQgZG93bmxvYWQ=")
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn test_download_streams_multiple_chunks_from_receipts() {
         let path = temp_file("multi.bin");
         let mut data = vec![0u8; MIN_CHUNK_SIZE as usize + 17];
@@ -412,6 +452,7 @@ mod tests {
         std::fs::write(&path, &data).unwrap();
 
         let task = TaskMessage {
+            id: Uuid::new_v4(),
             command: "download".into(),
             parameters: serde_json::json!({
                 "path": path.to_string_lossy(),

