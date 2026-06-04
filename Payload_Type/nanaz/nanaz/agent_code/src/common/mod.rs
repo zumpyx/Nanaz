@@ -3,4 +3,5 @@
 //! Modules here are small shared helpers used across commands.
 
 pub mod base64;
+pub mod cwd;
 pub mod pathguard;

@@ -49,6 +49,8 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::common::cwd;
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct PostResponseReceipt {
     pub task_id: Uuid,
@@ -74,8 +76,32 @@ pub fn responses_from_post_response_receipts(
     out
 }
 
-/// Route any command to its handler.
-pub fn dispatch(task: &TaskMessage) -> TaskResponse {
+fn command_uses_process_cwd(command: &str) -> bool {
+    matches!(
+        command,
+        "cat"
+            | "cd"
+            | "cp"
+            | "download"
+            | "execute"
+            | "execute_assembly"
+            | "ls"
+            | "tree"
+            | "mkdir"
+            | "mv"
+            | "pwd"
+            | "rm"
+            | "upload"
+            | "wget"
+            | "cmd"
+            | "powershell"
+            | "sh"
+            | "bash"
+            | "powerpick"
+    )
+}
+
+fn dispatch_inner(task: &TaskMessage) -> TaskResponse {
     match task.command.as_str() {
         "cat" => cat::handle(task),
         "cd" => cd::handle(task),
@@ -106,5 +132,51 @@ pub fn dispatch(task: &TaskMessage) -> TaskResponse {
         "wget" => wget::handle(task),
         "whoami" => whoami::handle(task),
         unknown => TaskResponse::failed(task.id, &format!("unknown command: {unknown}")),
+    }
+}
+
+/// Route any command to its handler.
+pub fn dispatch(task: &TaskMessage) -> TaskResponse {
+    if command_uses_process_cwd(&task.command) {
+        cwd::with_cwd_lock(|| dispatch_inner(task))
+    } else {
+        dispatch_inner(task)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cwd_sensitive_commands_are_locked() {
+        for command in [
+            "cat",
+            "cd",
+            "download",
+            "execute",
+            "ls",
+            "pwd",
+            "upload",
+            "bash",
+            "powerpick",
+        ] {
+            assert!(
+                command_uses_process_cwd(command),
+                "{command} must be locked"
+            );
+        }
+    }
+
+    #[test]
+    fn cwd_independent_commands_stay_parallel() {
+        for command in [
+            "env", "netstat", "ps", "resolve", "sleep", "sysinfo", "whoami",
+        ] {
+            assert!(
+                !command_uses_process_cwd(command),
+                "{command} should not take the cwd lock"
+            );
+        }
     }
 }
