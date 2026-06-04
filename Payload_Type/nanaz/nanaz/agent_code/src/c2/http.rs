@@ -107,7 +107,11 @@ impl HttpProfile {
 
 impl C2Transport for HttpProfile {
     fn get_aes_psk(&self) -> Option<String> {
-        self.aes_psk.clone()
+        self.aes_psk
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
     }
 
     fn set_aes_psk(&mut self, _key: &str) -> Option<String> {

@@ -88,6 +88,17 @@ def _read_cargo_semver() -> str:
     return "0.0.0"
 
 
+def _extract_aes_psk(value):
+    if isinstance(value, dict):
+        key = value.get("enc_key")
+    else:
+        key = value
+    if key is None:
+        return None
+    key = str(key).strip()
+    return key or None
+
+
 class Nanaz(PayloadType):
     name = "nanaz"
     file_extension = "exe"
@@ -144,7 +155,7 @@ class Nanaz(PayloadType):
                 name = c2.get_c2profile()["name"]
                 if name == "http":
                     aes = params.pop("AESPSK", None)
-                    params["aes_psk"] = aes.get("enc_key", "") if isinstance(aes, dict) else (aes or "")
+                    params["aes_psk"] = _extract_aes_psk(aes)
                     if params.get("encrypted_exchange_check"):
                         raise Exception(
                             "http encrypted_exchange_check is not implemented by nanaz"

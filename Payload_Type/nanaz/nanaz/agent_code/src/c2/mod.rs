@@ -57,15 +57,10 @@ impl C2Profile {
     /// profile default" and skipped.
     pub fn validate_psk(&self) -> core::result::Result<(), ConfigError> {
         let psk = match self {
-            C2Profile::Http(p) => p.aes_psk.as_ref(),
+            C2Profile::Http(p) => p.aes_psk.as_ref().filter(|psk| !psk.trim().is_empty()),
         };
         let Some(psk) = psk else { return Ok(()) };
 
-        if psk.is_empty() {
-            return Err(ConfigError::InvalidPsk {
-                reason: "aes_psk is empty".into(),
-            });
-        }
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(psk.trim())
             .map_err(|e| ConfigError::InvalidPsk {
@@ -122,5 +117,55 @@ impl C2Transport for C2Profile {
         match self {
             C2Profile::Http(profile) => profile.post_response(packed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn http_profile_with_psk(aes_psk: Option<String>) -> C2Profile {
+        C2Profile::Http(http::HttpProfile {
+            aes_psk,
+            callback_host: "http://127.0.0.1".into(),
+            callback_interval: 10,
+            callback_jitter: 0,
+            callback_port: 80,
+            encrypted_exchange_check: false,
+            get_uri: "index".into(),
+            headers: Default::default(),
+            killdate: "".into(),
+            post_uri: "data".into(),
+            proxy_host: "".into(),
+            proxy_pass: "".into(),
+            proxy_port: "".into(),
+            proxy_user: "".into(),
+            query_path_name: "q".into(),
+            external_ip_check: false,
+        })
+    }
+
+    #[test]
+    fn empty_psk_means_plaintext_http() {
+        assert!(http_profile_with_psk(None).validate_psk().is_ok());
+        assert!(
+            http_profile_with_psk(Some("".into()))
+                .validate_psk()
+                .is_ok()
+        );
+        assert!(
+            http_profile_with_psk(Some("   ".into()))
+                .validate_psk()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn malformed_psk_is_rejected() {
+        assert!(
+            http_profile_with_psk(Some("not-base64".into()))
+                .validate_psk()
+                .is_err()
+        );
     }
 }
