@@ -4,6 +4,8 @@
 //! it as base64 in `assembly_b64`; the agent decodes it and executes the CLR
 //! entry point from memory.
 
+#![cfg_attr(not(any(windows, test)), allow(dead_code))]
+
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 

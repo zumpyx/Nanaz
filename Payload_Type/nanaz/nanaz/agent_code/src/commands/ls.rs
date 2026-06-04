@@ -254,7 +254,7 @@ pub fn handle_tree(task: &TaskMessage) -> TaskResponse {
         Ok(files) => files,
         Err(e) => return TaskResponse::failed(task.id, &e),
     };
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by_key(|entry| entry.name.to_lowercase());
 
     let mut lines = vec![render_path(&resolved)];
     for entry in files {
