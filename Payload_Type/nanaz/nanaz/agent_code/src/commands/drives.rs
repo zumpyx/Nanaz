@@ -3,6 +3,7 @@
 //! Windows reports accessible drive-letter roots such as `C:\`.
 //! Linux reports unique mount points from `/proc/mounts`.
 
+#[cfg(not(windows))]
 use std::collections::BTreeSet;
 #[cfg(windows)]
 use std::path::Path;
@@ -25,7 +26,7 @@ fn parse_params(task: &TaskMessage) -> Result<Params, String> {
 }
 
 #[cfg(windows)]
-fn list_drives() -> Result<Vec<String>, String> {
+pub(super) fn list_drives() -> Result<Vec<String>, String> {
     let drives = (b'A'..=b'Z')
         .filter_map(|letter| {
             let drive = format!("{}:\\", letter as char);
@@ -36,7 +37,7 @@ fn list_drives() -> Result<Vec<String>, String> {
 }
 
 #[cfg(not(windows))]
-fn list_drives() -> Result<Vec<String>, String> {
+pub(super) fn list_drives() -> Result<Vec<String>, String> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| format!("read /proc/mounts failed: {e}"))?;
     let mut out = BTreeSet::new();
