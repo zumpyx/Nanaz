@@ -458,14 +458,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             // string. An empty string makes the browser associate the rows
             // with an empty host instead of the callback's host.
             //
-            // Do not default update_deleted=true here. Mythic's server-side
-            // cleanup searches by operation/host/group, not by callback only,
-            // so callbacks on the same host can prevent the current callback
-            // from getting a complete process tree.
+            // Process Browser refreshes are full snapshots for this host and
+            // callback tree group. Mythic only runs that refresh path when at
+            // least one entry has update_deleted=true.
             for p in &mut procs {
                 if p.host.trim().is_empty() {
                     p.host = process_host();
                 }
+                p.update_deleted = true;
             }
             normalize_process_tree(&mut procs);
 
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ps_does_not_default_update_deleted() {
+    fn test_ps_marks_full_snapshot_for_process_browser() {
         let task = TaskMessage {
             command: "ps".into(),
             parameters: "{}".into(),
@@ -545,7 +545,7 @@ mod tests {
         };
         let resp = handle(&task);
         assert!(!resp.processes.is_empty());
-        assert!(resp.processes.iter().all(|p| !p.update_deleted));
+        assert!(resp.processes.iter().all(|p| p.update_deleted));
     }
 
     #[test]
