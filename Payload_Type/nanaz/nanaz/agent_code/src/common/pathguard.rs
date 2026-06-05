@@ -128,15 +128,23 @@ fn is_same_or_child(path: &str, prefix: &str) -> bool {
 /// Returns true if `path` lands under a protected system directory.
 pub fn is_protected_path(path: &str) -> bool {
     let normalized = normalize_for_match(path);
-    if PROTECTED_EXACT_PATHS
-        .iter()
-        .any(|exact| normalized == exact.replace('\\', "/"))
-    {
+    if is_exact_protected_path_normalized(&normalized) {
         return true;
     }
     PROTECTED_PREFIXES
         .iter()
         .any(|prefix| is_same_or_child(&normalized, prefix))
+}
+
+fn is_exact_protected_path_normalized(normalized: &str) -> bool {
+    PROTECTED_EXACT_PATHS
+        .iter()
+        .any(|exact| normalized == exact.replace('\\', "/"))
+}
+
+/// Returns true only for broad filesystem roots like `/` or `C:\`.
+pub fn is_protected_root_path(path: &str) -> bool {
+    is_exact_protected_path_normalized(&normalize_for_match(path))
 }
 
 #[cfg(test)]

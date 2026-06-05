@@ -32,7 +32,9 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{
+    display_path, is_protected_path, is_protected_root_path, normalize_user_path,
+};
 
 #[derive(Deserialize)]
 struct Params {
@@ -52,7 +54,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    if !params.allow_system_path && is_protected_path(&path_str) {
+    if !params.allow_system_path
+        && is_protected_path(&path_str)
+        && !is_protected_root_path(&path_str)
+    {
         return TaskResponse::failed(
             task.id,
             &format!(
@@ -134,22 +139,40 @@ mod tests {
 
     #[test]
     fn test_cd_into_existing_dir() {
-        let old_cwd = std::env::current_dir().unwrap();
-        let dir = unique_tmp("ok");
-        let task = TaskMessage {
-            command: "cd".into(),
-            parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
-            ..Default::default()
-        };
-        let resp = handle(&task);
-        assert_eq!(resp.status.as_deref(), Some("completed"));
-        let pr = resp.process_response.expect("process_response set");
-        assert_eq!(
-            pr["cwd"].as_str().unwrap(),
-            dir.canonicalize().unwrap().to_string_lossy()
-        );
-        std::env::set_current_dir(old_cwd).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+        crate::common::cwd::with_cwd_lock(|| {
+            let old_cwd = std::env::current_dir().unwrap();
+            let dir = unique_tmp("ok");
+            let task = TaskMessage {
+                command: "cd".into(),
+                parameters: serde_json::json!({ "path": dir.to_string_lossy() }).to_string(),
+                ..Default::default()
+            };
+            let resp = handle(&task);
+            assert_eq!(resp.status.as_deref(), Some("completed"));
+            let pr = resp.process_response.expect("process_response set");
+            assert_eq!(
+                pr["cwd"].as_str().unwrap(),
+                dir.canonicalize().unwrap().to_string_lossy()
+            );
+            std::env::set_current_dir(old_cwd).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_cd_root_allowed_by_default() {
+        crate::common::cwd::with_cwd_lock(|| {
+            let old_cwd = std::env::current_dir().unwrap();
+            let task = TaskMessage {
+                command: "cd".into(),
+                parameters: r#"{"path": "/"}"#.into(),
+                ..Default::default()
+            };
+            let resp = handle(&task);
+            assert_eq!(resp.status.as_deref(), Some("completed"));
+            std::env::set_current_dir(old_cwd).unwrap();
+        });
     }
 
     #[test]
