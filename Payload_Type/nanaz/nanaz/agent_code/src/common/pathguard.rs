@@ -28,6 +28,9 @@ pub const PROTECTED_PREFIXES: &[&str] = &[
     "c:\\programdata",
 ];
 
+/// Exact paths that are too broad to treat as normal prefixes.
+pub const PROTECTED_EXACT_PATHS: &[&str] = &["/", "c:"];
+
 /// Normalize operator-supplied paths to the target platform separator.
 ///
 /// Operators can type `/` everywhere on Windows and the agent maps it to `\`.
@@ -104,10 +107,13 @@ fn normalize_for_match(path: &str) -> String {
         .ok()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| lexical_normalize(&candidate).to_string_lossy().to_string());
-    normalize_user_path(&canonical)
+    let mut normalized = normalize_user_path(&canonical)
         .replace('\\', "/")
-        .trim_end_matches(['/', '\\'])
-        .to_lowercase()
+        .to_lowercase();
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }
 
 fn is_same_or_child(path: &str, prefix: &str) -> bool {
@@ -122,6 +128,12 @@ fn is_same_or_child(path: &str, prefix: &str) -> bool {
 /// Returns true if `path` lands under a protected system directory.
 pub fn is_protected_path(path: &str) -> bool {
     let normalized = normalize_for_match(path);
+    if PROTECTED_EXACT_PATHS
+        .iter()
+        .any(|exact| normalized == exact.replace('\\', "/"))
+    {
+        return true;
+    }
     PROTECTED_PREFIXES
         .iter()
         .any(|prefix| is_same_or_child(&normalized, prefix))
@@ -133,6 +145,7 @@ mod tests {
 
     #[test]
     fn linux_protected() {
+        assert!(is_protected_path("/"));
         assert!(is_protected_path("/etc/passwd"));
         assert!(is_protected_path("/usr/local/bin/nanaz"));
         assert!(is_protected_path("/var/log/syslog"));
@@ -159,6 +172,7 @@ mod tests {
 
     #[test]
     fn windows_protected() {
+        assert!(is_protected_path("C:\\"));
         assert!(is_protected_path(
             "C:\\Windows\\System32\\drivers\\etc\\hosts"
         ));
