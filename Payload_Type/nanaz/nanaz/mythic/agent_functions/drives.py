@@ -22,6 +22,7 @@ class DrivesCommand(CommandBase):
     author = "@zumpyx"
     argument_class = DrivesArguments
     attackmapping = ["T1083"]
+    supported_ui_features = ["file_browser:list_roots"]
     attributes = simple_command_attributes()
 
     async def create_go_tasking(

@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::common::pathguard::{display_path as render_path, normalize_user_path};
-use crate::dispatch::drives;
 use crate::sys::metadata;
 use mythic::{FileBrowserEntry, TaskMessage, TaskResponse};
 use serde::Deserialize;
@@ -164,20 +163,6 @@ fn listing_output(parent: &str, name: &str, files: &[FileBrowserEntry]) -> Strin
     lines.join("\n")
 }
 
-fn drives_output(files: &[FileBrowserEntry]) -> String {
-    if files.is_empty() {
-        return "(no drives found)".into();
-    }
-
-    let mut lines = Vec::with_capacity(files.len() + 2);
-    lines.push("Available filesystem roots:".into());
-    for file in files {
-        lines.push(format!("  DIR   {}", file.name));
-    }
-    lines.push(format!("-- {} entries --", files.len()));
-    lines.join("\n")
-}
-
 // ── Listing helpers ────────────────────────────────────────
 
 /// Build a FileBrowserEntry for a single directory entry.
@@ -314,10 +299,6 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
     };
 
     let input_path = normalize_user_path(&params.path);
-    if input_path.trim().is_empty() {
-        return list_filesystem_roots(task, local_host(&params));
-    }
-
     let resolved = resolve_path(&input_path);
     let host = local_host(&params);
     let (node_name, parent_path) = split_name_parent(&resolved, &input_path);
@@ -419,40 +400,6 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
     }
 }
 
-fn list_filesystem_roots(task: &TaskMessage, host: Option<String>) -> TaskResponse {
-    let roots = match drives::list_drives() {
-        Ok(roots) => roots,
-        Err(e) => return TaskResponse::failed(task.id, &e),
-    };
-
-    let files: Vec<FileBrowserEntry> = roots
-        .into_iter()
-        .map(|root| FileBrowserEntry {
-            is_file: false,
-            name: root,
-            size: Some(0),
-            success: Some(true),
-            ..Default::default()
-        })
-        .collect();
-
-    TaskResponse {
-        task_id: task.id,
-        completed: Some(true),
-        status: Some("completed".into()),
-        user_output: Some(drives_output(&files)),
-        file_browser: Some(FileBrowserEntry {
-            is_file: false,
-            name: "".into(),
-            host,
-            success: Some(true),
-            files,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
-}
-
 // ── Tests ───────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -514,27 +461,6 @@ mod tests {
         let resp = handle(&task);
         let fb = resp.file_browser.expect("file_browser set");
         assert_eq!(fb.success, Some(false));
-    }
-
-    #[test]
-    fn test_ls_empty_path_lists_filesystem_roots() {
-        let task = TaskMessage {
-            command: "ls".into(),
-            parameters: serde_json::json!({ "path": "" }).to_string(),
-            ..Default::default()
-        };
-        let resp = handle(&task);
-        assert_eq!(resp.status.as_deref(), Some("completed"));
-        assert!(
-            resp.user_output
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Available filesystem roots")
-        );
-        let fb = resp.file_browser.expect("file_browser set");
-        assert_eq!(fb.name, "");
-        assert_eq!(fb.success, Some(true));
-        assert!(fb.files.iter().all(|entry| !entry.is_file));
     }
 
     #[test]

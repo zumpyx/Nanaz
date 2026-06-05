@@ -8,7 +8,8 @@ use std::collections::BTreeSet;
 #[cfg(windows)]
 use std::path::Path;
 
-use mythic::{TaskMessage, TaskResponse};
+use crate::sys::metadata;
+use mythic::{FileBrowserEntry, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -26,7 +27,7 @@ fn parse_params(task: &TaskMessage) -> Result<Params, String> {
 }
 
 #[cfg(windows)]
-pub(super) fn list_drives() -> Result<Vec<String>, String> {
+fn list_drives() -> Result<Vec<String>, String> {
     let drives = (b'A'..=b'Z')
         .filter_map(|letter| {
             let drive = format!("{}:\\", letter as char);
@@ -37,7 +38,7 @@ pub(super) fn list_drives() -> Result<Vec<String>, String> {
 }
 
 #[cfg(not(windows))]
-pub(super) fn list_drives() -> Result<Vec<String>, String> {
+fn list_drives() -> Result<Vec<String>, String> {
     let mounts = std::fs::read_to_string("/proc/mounts")
         .map_err(|e| format!("read /proc/mounts failed: {e}"))?;
     let mut out = BTreeSet::new();
@@ -70,6 +71,23 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         } else {
             drives.join("\n")
         }),
+        file_browser: Some(FileBrowserEntry {
+            is_file: false,
+            name: "".into(),
+            host: metadata::hostname().map(|h| h.to_uppercase()),
+            success: Some(true),
+            files: drives
+                .into_iter()
+                .map(|drive| FileBrowserEntry {
+                    is_file: false,
+                    name: drive,
+                    size: Some(0),
+                    success: Some(true),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }),
         ..Default::default()
     }
 }
@@ -88,6 +106,10 @@ mod tests {
         let resp = handle(&task);
         assert_eq!(resp.status.as_deref(), Some("completed"));
         assert!(resp.user_output.is_some());
+        let fb = resp.file_browser.expect("file_browser set");
+        assert_eq!(fb.name, "");
+        assert_eq!(fb.success, Some(true));
+        assert!(fb.files.iter().all(|entry| !entry.is_file));
     }
 
     #[test]
