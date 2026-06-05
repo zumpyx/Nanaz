@@ -1,10 +1,8 @@
 """rm — remove files / directories on the target.
 
-Cross-platform. The Rust side enforces two safety guards:
+Cross-platform. The Rust side keeps one explicit safety guard:
 
-  1. System paths (e.g. /etc, C:\\Windows) are refused unless the
-     operator opts in with `allow_system_path: true`.
-  2. Recursive deletion of directories requires
+  1. Recursive deletion of directories requires
      `confirm_destructive: true` regardless of the path.
 
 The Mythic file browser's "Delete" action (`file_browser:remove`)
@@ -36,11 +34,6 @@ class RmArguments(FileBrowserArguments):
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
             CommandParameter(name="recursive", type=ParameterType.Boolean, default_value=False),
             CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
-            CommandParameter(
                 name="confirm_destructive",
                 type=ParameterType.Boolean,
                 default_value=False,
@@ -70,7 +63,6 @@ class RmArguments(FileBrowserArguments):
 
         recursive = False
         confirm = False
-        allow_system_path = False
         path_parts = []
         for tok in parts:
             low = tok.lower()
@@ -81,8 +73,6 @@ class RmArguments(FileBrowserArguments):
                 confirm = True
             elif low in ("--confirm-destructive", "--confirm", "-y", "--yes", "-f", "/f"):
                 confirm = True
-            elif low == "--allow-system-path":
-                allow_system_path = True
             elif low.startswith("-"):
                 # Unknown flag — let the agent side fail loudly rather
                 # than silently ignore.
@@ -96,8 +86,6 @@ class RmArguments(FileBrowserArguments):
             self.set_arg("recursive", True)
         if confirm:
             self.set_arg("confirm_destructive", True)
-        if allow_system_path:
-            self.set_arg("allow_system_path", True)
 
     async def parse_dictionary(self, dictionary_arguments):
         """Mythic UI file-browser sends {host, full_path, path, file}.

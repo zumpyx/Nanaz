@@ -1,27 +1,20 @@
 //! Remove a file or directory — cross-platform via std::fs.
 //!
-//! Recursive deletion (`rm -r`) is doubly dangerous: a single typo can
-//! clobber an entire tree. Refuse to operate on system paths unless the
-//! operator sets `allow_system_path: true`, and require an extra
-//! `confirm_destructive: true` flag for recursive deletes against any
-//! non-system path (an opt-in second factor — operators who have to
-//! type two flags for a destructive op make fewer mistakes).
+//! Recursive deletion (`rm -r`) is doubly dangerous: require an extra
+//! `confirm_destructive: true` flag for recursive deletes.
 
 use std::path::Path;
 
 use mythic::{Artifact, RemovedFileInfo, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
     path: String,
     #[serde(default)]
     recursive: bool,
-    /// When true, allow deleting system paths (default false).
-    #[serde(default)]
-    allow_system_path: bool,
     /// When true, allow recursive deletion (default false). Required for
     /// `rm -r` regardless of the path being a system path.
     #[serde(default)]
@@ -37,16 +30,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    let is_system = is_protected_path(&path_str);
-    if is_system && !params.allow_system_path {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing to remove system path {}; set allow_system_path=true to override",
-                path_str
-            ),
-        );
-    }
     if params.recursive && !params.confirm_destructive {
         return TaskResponse::failed(
             task.id,

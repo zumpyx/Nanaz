@@ -34,7 +34,7 @@ use mythic::{Artifact, TaskDownload, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 use crate::dispatch::PostResponseReceipt;
 
 // ── Params ──────────────────────────────────────────────────
@@ -45,9 +45,6 @@ struct Params {
     /// Chunk size in bytes (default 512 KiB). Clamped to [64 KiB, 8 MiB].
     #[serde(default)]
     chunk_size: Option<u32>,
-    /// When true, allow exfiltrating system paths (default false).
-    #[serde(default)]
-    allow_system_path: bool,
     #[serde(default)]
     host: Option<String>,
 }
@@ -276,16 +273,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    if !params.allow_system_path && is_protected_path(&path_str) {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing to download system path {}; set allow_system_path=true to override",
-                path_str
-            ),
-        );
-    }
-
     let path = stable_read_path(Path::new(&path_str));
     let filename = path
         .file_name()

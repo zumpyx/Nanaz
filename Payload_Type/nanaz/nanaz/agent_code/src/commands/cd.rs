@@ -32,19 +32,11 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::common::pathguard::{
-    display_path, is_protected_path, is_protected_root_path, normalize_user_path,
-};
+use crate::common::pathguard::{display_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
     path: String,
-    /// When true, allow entering system paths (default false).
-    /// Most file browsers never need this — they default to the agent's
-    /// own cwd — but an operator who wants to browse /etc from the
-    /// command line can opt in.
-    #[serde(default)]
-    allow_system_path: bool,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -54,19 +46,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    if !params.allow_system_path
-        && is_protected_path(&path_str)
-        && !is_protected_root_path(&path_str)
-    {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing to cd into system path {}; set allow_system_path=true to override",
-                path_str
-            ),
-        );
-    }
-
     let path = Path::new(&path_str);
 
     // Validate up front: cd to a missing path leaves the old cwd

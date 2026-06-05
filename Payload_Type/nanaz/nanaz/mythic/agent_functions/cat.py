@@ -19,11 +19,6 @@ class CatArguments(FileBrowserArguments):
                 default_value="",
             ),
             CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
-            CommandParameter(
                 name="max_bytes",
                 type=ParameterType.Number,
                 default_value=16777216,

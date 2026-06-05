@@ -19,11 +19,6 @@ class UploadArguments(FileBrowserArguments):
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
             CommandParameter(name="file", type=ParameterType.File),
             CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
-            CommandParameter(
                 name="max_bytes",
                 type=ParameterType.Number,
                 default_value=268435456,

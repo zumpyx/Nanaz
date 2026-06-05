@@ -19,16 +19,6 @@ class CpArguments(FileBrowserArguments):
         self.args = [
             CommandParameter(name="src", type=ParameterType.String, default_value=""),
             CommandParameter(name="dst", type=ParameterType.String, default_value=""),
-            CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
-            CommandParameter(
-                name="allow_source_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
         ]
 
     async def parse_arguments(self):
@@ -44,10 +34,6 @@ class CpArguments(FileBrowserArguments):
                 raise Exception("cp JSON requires 'src' and 'dst'.")
             self.set_arg("src", data["src"])
             self.set_arg("dst", data["dst"])
-            if "allow_system_path" in data:
-                self.set_arg("allow_system_path", data["allow_system_path"])
-            if "allow_source_system_path" in data:
-                self.set_arg("allow_source_system_path", data["allow_source_system_path"])
             return
         # Preserve Windows backslashes while still allowing quoted paths:
         # cp "/path with space/a.txt" "/path with space/b.txt" from the CLI.

@@ -13,7 +13,6 @@
 //! ```json
 //! {
 //!     "path": "/etc/issue",
-//!     "allow_system_path": false,   // optional, default false
 //!     "max_bytes": 16777216         // optional, override cap (default 16 MiB)
 //! }
 //! ```
@@ -24,7 +23,7 @@ use std::path::Path;
 use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 use crate::sys::encoding::decode_output;
 
 /// Default cap (in bytes) on the size of a file `cat` will fully
@@ -42,9 +41,6 @@ const TAIL_BYTES: usize = 64 * 1024;
 #[derive(Deserialize)]
 struct Params {
     path: String,
-    /// When true, allow reading system paths (default false).
-    #[serde(default)]
-    allow_system_path: bool,
     /// Override the size cap. Clamped to [1 KiB, 256 MiB].
     #[serde(default)]
     max_bytes: Option<u64>,
@@ -57,16 +53,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    if !params.allow_system_path && is_protected_path(&path_str) {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing to read system path {}; set allow_system_path=true to override",
-                path_str
-            ),
-        );
-    }
-
     let path = Path::new(&path_str);
 
     // Look up the size up front so we can pick the right path: full

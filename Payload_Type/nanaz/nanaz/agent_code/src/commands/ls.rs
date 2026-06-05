@@ -9,16 +9,8 @@
 //!
 //! Response: `TaskResponse.file_browser` with a [`FileBrowserEntry`] tree.
 //!
-//! Notes on the `set_as_user_output` / `user_output` interaction:
-//!
-//! The Mythic UI in its new (file-browser) mode shows the structured
-//! payload by default, not `user_output`. We deliberately leave
-//! `user_output` empty here so the Python `LsCommand.process_response`
-//! is the *only* writer of the human-readable table — without that
-//! discipline, the operator would see two output blocks (one from
-//! the structured payload, one from the user_output text) for every
-//! single `ls` call. Earlier versions had this race and the resulting
-//! doubled output was the most-reported UI bug in the operator chat.
+//! The response includes both `file_browser` for Mythic's file browser
+//! and `user_output` for the interact pane.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -140,6 +132,35 @@ fn join_display(parent: &str, name: &str) -> String {
     } else {
         format!("{parent}{sep}{name}")
     }
+}
+
+fn format_size(n: i64) -> String {
+    if n < 1024 {
+        format!("{n}B")
+    } else if n < 1024 * 1024 {
+        format!("{}KB", n / 1024)
+    } else if n < 1024 * 1024 * 1024 {
+        format!("{}MB", n / (1024 * 1024))
+    } else {
+        format!("{}GB", n / (1024 * 1024 * 1024))
+    }
+}
+
+fn listing_output(parent: &str, name: &str, files: &[FileBrowserEntry]) -> String {
+    let path = join_display(parent, name);
+    if files.is_empty() {
+        return format!("empty: {path}");
+    }
+
+    let mut lines = Vec::with_capacity(files.len() + 2);
+    lines.push(format!("Listing: {path}"));
+    for file in files {
+        let marker = if file.is_file { "FILE" } else { "DIR " };
+        let size = format_size(file.size.unwrap_or(0));
+        lines.push(format!("  {marker}  {:<40}  {:>8}", file.name, size));
+    }
+    lines.push(format!("-- {} entries --", files.len()));
+    lines.join("\n")
 }
 
 // ── Listing helpers ────────────────────────────────────────
@@ -304,18 +325,16 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
     };
 
     if meta.is_file() {
-        // Single file listing — surface the entry directly so the UI
-        // shows the file without us having to write a separate stdout.
-        // `set_as_user_output` would force the structured payload into
-        // the user_output field; combined with the Python wrapper
-        // writing a second formatted table this used to produce a
-        // doubled output. We leave both flags off and let the Python
-        // wrapper emit the human-readable line.
+        let output = format!(
+            "{} ({})",
+            join_display(parent_path.as_deref().unwrap_or_default(), &node_name),
+            format_size(meta.len() as i64)
+        );
         let entry = FileBrowserEntry {
             is_file: true,
-            name: node_name,
+            name: node_name.clone(),
             host,
-            parent_path,
+            parent_path: parent_path.clone(),
             size: Some(meta.len() as i64),
             access_time: meta.accessed().ok().and_then(to_millis),
             modify_time: meta.modified().ok().and_then(to_millis),
@@ -327,6 +346,7 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
+            user_output: Some(output),
             file_browser: Some(entry),
             ..Default::default()
         }
@@ -350,17 +370,16 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
-        // The structured `file_browser` payload is what the Mythic UI
-        // consumes. The Python `LsCommand.process_response` writes a
-        // human-readable table via `MythicRPCTaskUpdate`. We
-        // deliberately leave `user_output` empty here and DO NOT set
-        // `set_as_user_output: true` — either of those would race with
-        // the Python-side formatter and produce a doubled block.
+        let output = listing_output(
+            parent_path.as_deref().unwrap_or_default(),
+            &node_name,
+            &files,
+        );
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: None,
+            user_output: Some(output),
             file_browser: Some(FileBrowserEntry {
                 is_file: false,
                 name: node_name,
@@ -415,6 +434,7 @@ mod tests {
         let resp = handle(&task);
         let fb = resp.file_browser.expect("file_browser set");
         assert_eq!(fb.success, Some(true));
+        assert!(resp.user_output.unwrap_or_default().contains("hello.txt"));
         assert!(
             !fb.files.is_empty(),
             "expected at least hello.txt in the listing"
@@ -444,10 +464,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ls_user_output_not_set() {
-        // Regression guard: the doubled-output bug used to occur when
-        // both `set_as_user_output: true` AND the Python wrapper wrote
-        // a formatted table. The fix keeps `user_output` empty here.
+    fn test_ls_user_output_set_without_structured_stdout_flag() {
+        // Interact needs `user_output`; the doubled-output guard is
+        // keeping `set_as_user_output` false on the structured payload.
         let dir = unique_tmp("no-double");
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
         let task = TaskMessage {
@@ -456,10 +475,9 @@ mod tests {
             ..Default::default()
         };
         let resp = handle(&task);
-        assert!(
-            resp.user_output.is_none(),
-            "user_output must be None to avoid double-display"
-        );
+        assert!(resp.user_output.unwrap_or_default().contains("a.txt"));
+        let fb = resp.file_browser.expect("file_browser set");
+        assert!(!fb.set_as_user_output);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

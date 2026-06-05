@@ -38,13 +38,7 @@ class CdArguments(TaskArguments):
                 name="path",
                 type=ParameterType.String,
                 description="Directory to change into.",
-            ),
-            CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-                description="Allow cd into protected system paths (default false).",
-            ),
+            )
         ]
 
     async def parse_dictionary(self, dictionary_arguments):

@@ -149,7 +149,7 @@ def browser_full_path(arguments: Dict[str, Any]) -> str:
     """Normalize Mythic file-browser tasking into the agent's path argument."""
     full_path = arguments.get("full_path")
     if full_path:
-        return str(full_path)
+        return normalize_browser_path(str(full_path))
 
     parent = arguments.get("path")
     name = arguments.get("file")
@@ -157,19 +157,26 @@ def browser_full_path(arguments: Dict[str, Any]) -> str:
         parent = str(parent)
         name = str(name)
         if not parent:
-            return name
+            return normalize_browser_path(name)
         if name.startswith(("/", "\\")) or (len(name) >= 2 and name[1] == ":"):
-            return name
+            return normalize_browser_path(name)
         sep = "\\" if "\\" in parent or (len(parent) >= 2 and parent[1] == ":") else "/"
         if parent.endswith(("/", "\\")):
-            return parent + name
-        return parent + sep + name
+            return normalize_browser_path(parent + name)
+        return normalize_browser_path(parent + sep + name)
 
     if parent is not None:
-        return str(parent)
+        return normalize_browser_path(str(parent))
     if name is not None:
-        return str(name)
+        return normalize_browser_path(str(name))
     return ""
+
+
+def normalize_browser_path(path: str) -> str:
+    """Keep Windows drive roots as roots when Mythic sends `C:`."""
+    if len(path) == 2 and path[1] == ":" and path[0].isalpha():
+        return path + "\\"
+    return path
 
 
 def error_aware_process_response(

@@ -10,7 +10,7 @@ use std::path::Path;
 use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 use crate::sys::network::http_get_to_writer;
 
 /// Hard cap on a single wget response. Larger transfers should use a
@@ -25,9 +25,6 @@ struct Params {
     /// Optional override for the byte cap. Clamped to [1, MAX_WGET_BYTES].
     #[serde(default)]
     max_bytes: Option<u64>,
-    /// When true, allows writing into protected system paths.
-    #[serde(default)]
-    allow_system_path: bool,
 }
 
 /// Extract a filename from a URL path, or fall back to "download".
@@ -79,16 +76,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     } else {
         Path::new(&normalize_user_path(&params.path)).to_path_buf()
     };
-
-    if !params.allow_system_path && is_protected_path(&display_path(&dest)) {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing write to system path {}; set allow_system_path=true to override",
-                display_path(&dest)
-            ),
-        );
-    }
 
     // Create parent dirs
     if let Some(parent) = dest.parent()
@@ -163,26 +150,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_wget_refuses_system_destination_before_network() {
-        let task = TaskMessage {
-            command: "wget".into(),
-            parameters: serde_json::json!({
-                "url": "http://127.0.0.1:1/payload.exe",
-                "path": "/etc/nanaz_wget_test",
-            })
-            .to_string(),
-            ..Default::default()
-        };
-        let resp = handle(&task);
-        assert_eq!(resp.status.as_deref(), Some("error"));
-        assert!(
-            resp.user_output
-                .unwrap_or_default()
-                .contains("refusing write to system path")
-        );
-    }
 
     #[test]
     fn test_wget_failure_preserves_existing_file() {

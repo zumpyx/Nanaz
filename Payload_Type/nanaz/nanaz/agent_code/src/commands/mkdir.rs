@@ -1,25 +1,15 @@
 //! Create a directory — cross-platform via std::fs::create_dir_all.
 //!
-//! Like the other destructive commands, mkdir refuses to operate on
-//! protected system paths unless the operator sets `allow_system_path:
-//! true`. Without that guard, a junior operator who mistypes
-//! `mkdir /etc/init.d` would happily create the tree (since
-//! `create_dir_all` is permissive). The guard forces an explicit
-//! second opt-in for the cases where the operator actually wants it.
-
 use std::path::Path;
 
 use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 
 #[derive(Deserialize)]
 struct Params {
     path: String,
-    /// When true, allow creating directories under system paths (default false).
-    #[serde(default)]
-    allow_system_path: bool,
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -29,16 +19,6 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
 
     let path_str = normalize_user_path(&params.path);
-    if !params.allow_system_path && is_protected_path(&path_str) {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing to mkdir under system path {}; set allow_system_path=true to override",
-                path_str
-            ),
-        );
-    }
-
     let path = Path::new(&path_str);
     match std::fs::create_dir_all(path) {
         Ok(_) => TaskResponse {
@@ -83,17 +63,5 @@ mod tests {
         assert_eq!(resp.status.as_deref(), Some("completed"));
         assert!(new.is_dir(), "expected {} to be a dir", new.display());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_mkdir_refuses_system_path() {
-        let task = TaskMessage {
-            command: "mkdir".into(),
-            parameters: r#"{"path": "/etc/nanaz_should_not_exist"}"#.into(),
-            ..Default::default()
-        };
-        let resp = handle(&task);
-        assert_eq!(resp.status.as_deref(), Some("error"));
     }
 }

@@ -31,11 +31,6 @@ class WgetArguments(FileBrowserArguments):
                 type=ParameterType.Number,
                 default_value=268435456,
             ),
-            CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
         ]
 
     async def parse_arguments(self):
@@ -52,7 +47,7 @@ class WgetArguments(FileBrowserArguments):
             self.set_arg("url", data["url"])
             if data.get("path"):
                 self.set_arg("path", data["path"])
-            for key in ("max_bytes", "allow_system_path"):
+            for key in ("max_bytes",):
                 if key in data:
                     self.set_arg(key, data[key])
             return
@@ -62,20 +57,11 @@ class WgetArguments(FileBrowserArguments):
             parts = split_cli_preserve_backslashes(cl)
         except ValueError as e:
             raise Exception(f"wget: failed to parse command line: {e}")
-        allow_system_path = False
-        filtered = []
-        for part in parts:
-            if part == "--allow-system-path":
-                allow_system_path = True
-            else:
-                filtered.append(part)
-        if not filtered:
+        if not parts:
             raise Exception("wget requires a URL.")
-        self.set_arg("url", filtered[0])
-        if len(filtered) > 1:
-            self.set_arg("path", filtered[1])
-        if allow_system_path:
-            self.set_arg("allow_system_path", True)
+        self.set_arg("url", parts[0])
+        if len(parts) > 1:
+            self.set_arg("path", parts[1])
 
 
 class WgetCommand(CommandBase):

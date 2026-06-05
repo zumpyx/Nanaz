@@ -22,11 +22,6 @@ class DownloadArguments(FileBrowserArguments):
                 type=ParameterType.Number,
                 default_value=524288,
             ),
-            CommandParameter(
-                name="allow_system_path",
-                type=ParameterType.Boolean,
-                default_value=False,
-            ),
         ]
 
 
