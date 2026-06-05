@@ -14,6 +14,8 @@ mod env;
 mod execute_assembly;
 #[path = "commands/exit.rs"]
 mod exit;
+#[path = "commands/help.rs"]
+mod help;
 #[path = "commands/kill.rs"]
 mod kill;
 #[path = "commands/ls.rs"]
@@ -114,6 +116,7 @@ fn dispatch_inner(task: &TaskMessage) -> TaskResponse {
         "execute" => process::handle_execute(task),
         "execute_assembly" => execute_assembly::handle(task),
         "exit" => exit::handle(task),
+        "help" => help::handle(task),
         "kill" => kill::handle(task),
         "ls" => ls::handle(task),
         "tree" => ls::handle_tree(task),
@@ -174,7 +177,7 @@ mod tests {
     #[test]
     fn cwd_independent_commands_stay_parallel() {
         for command in [
-            "drives", "env", "netstat", "ps", "resolve", "sleep", "sysinfo", "whoami",
+            "drives", "env", "help", "netstat", "ps", "resolve", "sleep", "sysinfo", "whoami",
         ] {
             assert!(
                 !command_uses_process_cwd(command),
