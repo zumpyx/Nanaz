@@ -133,6 +133,7 @@ COMMAND_HELP = [
     ),
     ("sh", "sh [command]", "Run a POSIX shell command."),
     ("sleep", "sleep [seconds] [jitter]", "Set callback sleep and jitter."),
+    ("socks", "socks -Port [port] -Action start", "Start or stop a SOCKS5 listener."),
     ("sysinfo", "sysinfo", "Gather system information."),
     ("tree", "tree [path]", "Recursively list a directory tree."),
     ("upload", "upload [destination_path]", "Upload a file to the target."),

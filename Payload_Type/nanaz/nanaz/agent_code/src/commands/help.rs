@@ -70,6 +70,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "sleep [seconds] [jitter]",
         "Set callback sleep and jitter.",
     ),
+    (
+        "socks",
+        "socks -Port [port] -Action start",
+        "Start or stop a SOCKS5 listener.",
+    ),
     ("sysinfo", "sysinfo", "Gather system information."),
     ("tree", "tree [path]", "Recursively list a directory tree."),
     (

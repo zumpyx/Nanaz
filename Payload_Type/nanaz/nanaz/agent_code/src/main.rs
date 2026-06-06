@@ -27,6 +27,7 @@ mod config;
 mod dispatch;
 mod error;
 pub use error::{Error, Result};
+mod socks;
 mod sys;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
