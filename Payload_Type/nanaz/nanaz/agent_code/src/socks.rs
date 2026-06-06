@@ -7,11 +7,19 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use mythic::SocksMessage;
 
 const MAX_READ_PER_CONN: usize = 32 * 1024;
+const MAX_CONNECTIONS: usize = 128;
+const MAX_PENDING_WRITE_BYTES: usize = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const NEGOTIATION_SUCCESS: [u8; 10] = [0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+const NEGOTIATION_FAILURE: [u8; 10] = [0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
+
+struct SocksConnection {
+    stream: TcpStream,
+    pending_writes: VecDeque<Vec<u8>>,
+}
 
 pub struct SocksManager {
-    connections: HashMap<u32, TcpStream>,
+    connections: HashMap<u32, SocksConnection>,
     outbound: VecDeque<SocksMessage>,
     last_activity: Option<Instant>,
 }
@@ -69,25 +77,43 @@ impl SocksManager {
         };
 
         if self.connections.contains_key(&message.server_id) {
-            if let Some(stream) = self.connections.get_mut(&message.server_id) {
-                if stream.write_all(&decoded).is_err() {
+            if let Some(connection) = self.connections.get_mut(&message.server_id) {
+                if pending_write_bytes(connection).saturating_add(decoded.len())
+                    > MAX_PENDING_WRITE_BYTES
+                {
+                    self.close(message.server_id, true);
+                    return;
+                }
+                connection.pending_writes.push_back(decoded);
+                if flush_pending_writes(connection).is_err() {
                     self.close(message.server_id, true);
                 }
             }
             return;
         }
 
+        if self.connections.len() >= MAX_CONNECTIONS {
+            self.queue_data(message.server_id, &NEGOTIATION_FAILURE, true);
+            return;
+        }
+
         match connect_from_socks_request(&decoded) {
             Ok(mut stream) => {
                 if stream.set_nonblocking(true).is_err() {
-                    self.close(message.server_id, true);
+                    self.queue_data(message.server_id, &NEGOTIATION_FAILURE, true);
                     return;
                 }
                 self.queue_data(message.server_id, &NEGOTIATION_SUCCESS, false);
                 let _ = stream.flush();
-                self.connections.insert(message.server_id, stream);
+                self.connections.insert(
+                    message.server_id,
+                    SocksConnection {
+                        stream,
+                        pending_writes: VecDeque::new(),
+                    },
+                );
             }
-            Err(_) => self.close(message.server_id, true),
+            Err(_) => self.queue_data(message.server_id, &NEGOTIATION_FAILURE, true),
         }
     }
 
@@ -95,10 +121,20 @@ impl SocksManager {
         let ids: Vec<u32> = self.connections.keys().copied().collect();
         for id in ids {
             let mut close = false;
+            if let Some(connection) = self.connections.get_mut(&id) {
+                if flush_pending_writes(connection).is_err() {
+                    close = true;
+                }
+            }
+            if close {
+                self.close(id, true);
+                continue;
+            }
+
             loop {
                 let mut buf = [0u8; MAX_READ_PER_CONN];
                 let read_result = match self.connections.get_mut(&id) {
-                    Some(stream) => stream.read(&mut buf),
+                    Some(connection) => connection.stream.read(&mut buf),
                     None => break,
                 };
 
@@ -145,6 +181,34 @@ impl SocksManager {
             data: Some(STANDARD.encode(data)),
         });
     }
+}
+
+fn pending_write_bytes(connection: &SocksConnection) -> usize {
+    connection.pending_writes.iter().map(Vec::len).sum()
+}
+
+fn flush_pending_writes(connection: &mut SocksConnection) -> io::Result<()> {
+    while let Some(mut data) = connection.pending_writes.pop_front() {
+        while !data.is_empty() {
+            match connection.stream.write(&data) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "socket write returned zero bytes",
+                    ));
+                }
+                Ok(n) => {
+                    data.drain(..n);
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    connection.pending_writes.push_front(data);
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn connect_from_socks_request(data: &[u8]) -> io::Result<TcpStream> {
