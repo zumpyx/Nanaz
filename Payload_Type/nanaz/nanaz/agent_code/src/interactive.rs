@@ -107,6 +107,9 @@ impl InteractiveManager {
 
     pub fn drain_responses(&mut self) -> Vec<TaskResponse> {
         self.poll_sessions();
+        if !self.outbound.is_empty() {
+            return Vec::new();
+        }
         self.responses.drain(..).collect()
     }
 
@@ -581,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_drain_keeps_exit_message_available() {
+    fn completion_waits_until_exit_message_is_drained() {
         #[cfg(not(windows))]
         {
             let mut manager = InteractiveManager::new();
@@ -601,18 +604,23 @@ mod tests {
                 message_type: MESSAGE_EXIT,
             }]);
 
+            assert!(
+                manager.drain_responses().is_empty(),
+                "completion should wait until outbound interactive messages are sent"
+            );
+            assert!(
+                manager
+                    .drain_outbound()
+                    .iter()
+                    .any(|message| message.message_type == MESSAGE_EXIT),
+                "exit message must be sent before completion response"
+            );
             let responses = manager.drain_responses();
             assert!(
                 responses
                     .iter()
-                    .any(|response| response.completed == Some(true))
-            );
-            let outbound = manager.drain_outbound();
-            assert!(
-                outbound
-                    .iter()
-                    .any(|message| message.message_type == MESSAGE_EXIT),
-                "exit message must remain available after draining completion responses"
+                    .any(|response| response.completed == Some(true)),
+                "completion should be sent after outbound interactive messages drain"
             );
         }
     }
