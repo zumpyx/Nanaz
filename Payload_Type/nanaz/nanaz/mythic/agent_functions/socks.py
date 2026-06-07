@@ -153,6 +153,7 @@ class SocksCommand(CommandBase):
         if not rpc_resp.Success:
             response.TaskStatus = MythicStatus.Error
             response.Stderr = rpc_resp.Error
+            response.Completed = True
             await SendMythicRPCResponseCreate(
                 MythicRPCResponseCreateMessage(
                     TaskID=taskData.Task.ID,
