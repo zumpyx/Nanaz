@@ -13,6 +13,7 @@ use crate::auxiliary::AuxiliaryManager;
 use crate::dispatch;
 use crate::rpfwd::RpfwdManager;
 use crate::socks::SocksManager;
+use crate::streams::StreamDriver;
 use core::sync::atomic::Ordering;
 
 const MAX_POST_RESPONSE_DRAIN_CYCLES: usize = 10_000;
@@ -54,8 +55,8 @@ impl ProtocolPump {
     }
 
     pub fn wants_fast_poll(&self) -> bool {
-        self.socks.wants_fast_poll()
-            || self.rpfwd.wants_fast_poll()
+        StreamDriver::wants_fast_poll(&self.socks)
+            || StreamDriver::wants_fast_poll(&self.rpfwd)
             || self.auxiliary.wants_fast_poll()
     }
 
@@ -65,21 +66,21 @@ impl ProtocolPump {
 
     pub fn build_shared(&mut self) -> AgentExtras {
         let mut shared = AgentExtras::default();
-        shared.socks = self.socks.drain_outbound();
-        shared.rpfwd = self.rpfwd.drain_outbound();
+        shared.socks = StreamDriver::drain_outbound(&mut self.socks);
+        shared.rpfwd = StreamDriver::drain_outbound(&mut self.rpfwd);
         self.auxiliary.drain_into(&mut shared);
         shared
     }
 
     pub fn handle_inbound(&mut self, extras: AgentResponseExtras) {
         self.auxiliary.handle_inbound(&extras);
-        self.socks.handle_inbound(extras.socks);
-        self.rpfwd.handle_inbound(extras.rpfwd);
+        StreamDriver::handle_inbound(&mut self.socks, extras.socks);
+        StreamDriver::handle_inbound(&mut self.rpfwd, extras.rpfwd);
     }
 
     pub fn requeue_shared(&mut self, shared: AgentExtras) {
-        self.socks.requeue_outbound_front(shared.socks);
-        self.rpfwd.requeue_outbound_front(shared.rpfwd);
+        StreamDriver::requeue_outbound_front(&mut self.socks, shared.socks);
+        StreamDriver::requeue_outbound_front(&mut self.rpfwd, shared.rpfwd);
         self.auxiliary.requeue_alerts_front(shared.alerts);
     }
 

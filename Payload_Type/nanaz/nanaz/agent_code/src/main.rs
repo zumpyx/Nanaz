@@ -31,6 +31,7 @@ pub use error::{Error, Result};
 mod protocol_pump;
 mod rpfwd;
 mod socks;
+mod streams;
 mod sys;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};

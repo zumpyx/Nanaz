@@ -8,6 +8,8 @@ use mythic::{ReversePortForwardMessage, TaskMessage, TaskResponse};
 use rand::Rng;
 use serde::Deserialize;
 
+use crate::streams::StreamDriver;
+
 const MAX_CONNECTIONS: usize = 128;
 const MAX_READ_PER_CONN: usize = 32 * 1024;
 const MAX_PENDING_WRITE_BYTES: usize = 1024 * 1024;
@@ -278,6 +280,26 @@ impl RpfwdManager {
                 return id;
             }
         }
+    }
+}
+
+impl StreamDriver for RpfwdManager {
+    type Message = ReversePortForwardMessage;
+
+    fn handle_inbound(&mut self, messages: Vec<Self::Message>) {
+        RpfwdManager::handle_inbound(self, messages);
+    }
+
+    fn drain_outbound(&mut self) -> Vec<Self::Message> {
+        RpfwdManager::drain_outbound(self)
+    }
+
+    fn requeue_outbound_front(&mut self, messages: Vec<Self::Message>) {
+        RpfwdManager::requeue_outbound_front(self, messages);
+    }
+
+    fn wants_fast_poll(&self) -> bool {
+        RpfwdManager::wants_fast_poll(self)
     }
 }
 
