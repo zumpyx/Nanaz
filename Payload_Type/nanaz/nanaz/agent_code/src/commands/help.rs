@@ -57,6 +57,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "Run a PowerShell command.",
     ),
     ("ps", "ps", "List processes for Mythic's process browser."),
+    (
+        "pty",
+        "pty [sh|bash|cmd|powershell]",
+        "Start an interactive shell task.",
+    ),
     ("pwd", "pwd", "Print the current working directory."),
     ("resolve", "resolve [hostname]", "Resolve a hostname."),
     (

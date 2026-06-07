@@ -5,7 +5,6 @@ use mythic::{AgentExtras, AlertMessage};
 pub struct AuxiliaryManager {
     outbound_alerts: VecDeque<AlertMessage>,
     warned_delegates: bool,
-    warned_interactive: bool,
     warned_edges: bool,
 }
 
@@ -14,7 +13,6 @@ impl AuxiliaryManager {
         Self {
             outbound_alerts: VecDeque::new(),
             warned_delegates: false,
-            warned_interactive: false,
             warned_edges: false,
         }
     }
@@ -23,10 +21,6 @@ impl AuxiliaryManager {
         if !extras.delegates.is_empty() && !self.warned_delegates {
             self.warned_delegates = true;
             self.warn("received delegate/P2P messages, but no P2P driver is loaded");
-        }
-        if !extras.interactive.is_empty() && !self.warned_interactive {
-            self.warned_interactive = true;
-            self.warn("received interactive messages, but no interactive driver is loaded");
         }
         if !extras.edges.is_empty() && !self.warned_edges {
             self.warned_edges = true;

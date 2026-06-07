@@ -354,6 +354,12 @@ pub fn run(config: Config) -> MythicResult<()> {
                         continue;
                     }
 
+                    if task.command == "pty" {
+                        let response = pump.start_interactive(&task);
+                        pump.pending_mut().push(response);
+                        continue;
+                    }
+
                     if is_control_task(&task.command) {
                         dispatch_task(task, &completed_tx);
                         continue;

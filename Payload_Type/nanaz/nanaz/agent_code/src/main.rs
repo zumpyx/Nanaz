@@ -28,6 +28,7 @@ mod config;
 mod dispatch;
 mod error;
 pub use error::{Error, Result};
+mod interactive;
 mod protocol_pump;
 mod rpfwd;
 mod socks;
