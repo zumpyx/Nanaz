@@ -12,9 +12,9 @@ class PtyArguments(TaskArguments):
                 cli_name="Shell",
                 display_name="Shell",
                 type=ParameterType.ChooseOne,
-                choices=["sh", "bash", "cmd", "powershell"],
-                default_value="",
-                description="Interactive shell to start. Empty uses the platform default.",
+                choices=["default", "sh", "bash", "cmd", "powershell"],
+                default_value="default",
+                description="Interactive shell to start.",
                 parameter_group_info=[ParameterGroupInfo(required=False, ui_position=0)],
             ),
         ]
@@ -25,8 +25,10 @@ class PtyArguments(TaskArguments):
     async def parse_arguments(self):
         shell = self.command_line.strip().lower()
         if shell:
-            if shell not in ("sh", "bash", "cmd", "powershell"):
-                raise Exception("pty shell must be one of: sh, bash, cmd, powershell.")
+            if shell not in ("default", "sh", "bash", "cmd", "powershell"):
+                raise Exception(
+                    "pty shell must be one of: default, sh, bash, cmd, powershell."
+                )
             self.set_arg("shell", shell)
 
 
@@ -51,8 +53,8 @@ class PtyCommand(CommandBase):
     async def create_go_tasking(
         self, taskData: PTTaskMessageAllData
     ) -> PTTaskCreateTaskingMessageResponse:
-        shell = taskData.args.get_arg("shell") or ""
-        display = f"-Shell {shell}" if shell else "-Shell default"
+        shell = taskData.args.get_arg("shell") or "default"
+        display = f"-Shell {shell}"
         return PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,
             Success=True,

@@ -11,6 +11,9 @@ from mythic_container.MythicRPC import (
     SendMythicRPCResponseCreate,
 )
 
+START_GROUP = "Start"
+STOP_GROUP = "Stop"
+
 
 class RpfwdArguments(TaskArguments):
     def __init__(self, command_line, **kwargs):
@@ -22,7 +25,18 @@ class RpfwdArguments(TaskArguments):
                 display_name="Listen Port",
                 type=ParameterType.Number,
                 description="Port to listen on where the nanaz agent is running.",
-                parameter_group_info=[ParameterGroupInfo(required=True, ui_position=0)],
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        group_name=START_GROUP,
+                        required=True,
+                        ui_position=0,
+                    ),
+                    ParameterGroupInfo(
+                        group_name=STOP_GROUP,
+                        required=True,
+                        ui_position=0,
+                    ),
+                ],
             ),
             CommandParameter(
                 name="remote_ip",
@@ -30,7 +44,13 @@ class RpfwdArguments(TaskArguments):
                 display_name="Remote IP",
                 type=ParameterType.String,
                 description="Remote IP Mythic connects to for forwarded traffic.",
-                parameter_group_info=[ParameterGroupInfo(required=True, ui_position=1)],
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        group_name=START_GROUP,
+                        required=True,
+                        ui_position=1,
+                    )
+                ],
             ),
             CommandParameter(
                 name="remote_port",
@@ -38,7 +58,13 @@ class RpfwdArguments(TaskArguments):
                 display_name="Remote Port",
                 type=ParameterType.Number,
                 description="Remote port Mythic connects to for forwarded traffic.",
-                parameter_group_info=[ParameterGroupInfo(required=True, ui_position=2)],
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        group_name=START_GROUP,
+                        required=True,
+                        ui_position=2,
+                    )
+                ],
             ),
             CommandParameter(
                 name="action",
@@ -48,7 +74,18 @@ class RpfwdArguments(TaskArguments):
                 choices=["start", "stop"],
                 default_value="start",
                 description="Start or stop the reverse port forward.",
-                parameter_group_info=[ParameterGroupInfo(required=False, ui_position=3)],
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        group_name=START_GROUP,
+                        required=False,
+                        ui_position=3,
+                    ),
+                    ParameterGroupInfo(
+                        group_name=STOP_GROUP,
+                        required=False,
+                        ui_position=1,
+                    ),
+                ],
             ),
         ]
 
@@ -126,7 +163,11 @@ class RpfwdCommand(CommandBase):
             TaskID=taskData.Task.ID,
             Success=True,
         )
+        group_name = taskData.args.get_parameter_group_name()
         action = taskData.args.get_arg("action") or "start"
+        if group_name == STOP_GROUP:
+            action = "stop"
+            taskData.args.set_arg("action", action)
         port = taskData.args.get_arg("port")
         remote_ip = taskData.args.get_arg("remote_ip") or ""
         remote_port = taskData.args.get_arg("remote_port") or 0

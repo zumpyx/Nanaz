@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -28,6 +28,7 @@ struct InteractiveSession {
     stdin: ChildStdin,
     rx: Receiver<InteractiveEvent>,
     last_activity: Instant,
+    exit_reason: Option<String>,
 }
 
 enum InteractiveEvent {
@@ -162,31 +163,53 @@ impl InteractiveManager {
         for task_id in ids {
             let mut close_reason = None;
             if let Some(session) = self.sessions.get_mut(&task_id) {
-                while let Ok(event) = session.rx.try_recv() {
-                    session.last_activity = Instant::now();
-                    match event {
-                        InteractiveEvent::Output(data) => {
-                            self.outbound.push_back(interactive_message(
-                                task_id,
-                                MESSAGE_OUTPUT,
-                                &data,
-                            ));
+                let readers_closed = loop {
+                    match session.rx.try_recv() {
+                        Ok(event) => {
+                            session.last_activity = Instant::now();
+                            match event {
+                                InteractiveEvent::Output(data) => {
+                                    self.outbound.push_back(interactive_message(
+                                        task_id,
+                                        MESSAGE_OUTPUT,
+                                        &data,
+                                    ));
+                                }
+                                InteractiveEvent::Error(data) => {
+                                    self.outbound.push_back(interactive_message(
+                                        task_id,
+                                        MESSAGE_ERROR,
+                                        &data,
+                                    ));
+                                }
+                            }
                         }
-                        InteractiveEvent::Error(data) => {
-                            self.outbound.push_back(interactive_message(
-                                task_id,
-                                MESSAGE_ERROR,
-                                &data,
-                            ));
+                        Err(TryRecvError::Empty) => break false,
+                        Err(TryRecvError::Disconnected) => break true,
+                    }
+                };
+
+                if session.exit_reason.is_none() {
+                    match session.child.try_wait() {
+                        Ok(Some(status)) => {
+                            let code = status.code().unwrap_or(-1);
+                            session.exit_reason =
+                                Some(format!("interactive session exited with code {code}"));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            session.exit_reason =
+                                Some(format!("interactive session status check failed: {e}"));
                         }
                     }
                 }
 
                 if session.last_activity.elapsed() >= SESSION_IDLE_TIMEOUT {
                     close_reason = Some("interactive session idle timeout".to_string());
-                } else if let Ok(Some(status)) = session.child.try_wait() {
-                    let code = status.code().unwrap_or(-1);
-                    close_reason = Some(format!("interactive session exited with code {code}"));
+                } else if readers_closed {
+                    close_reason = session.exit_reason.clone().or_else(|| {
+                        Some("interactive session streams closed unexpectedly".to_string())
+                    });
                 }
             }
             if let Some(reason) = close_reason {
@@ -251,7 +274,7 @@ struct ShellSpec {
 fn shell_spec(shell: Option<&str>) -> Result<ShellSpec, String> {
     let normalized = shell
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("default"))
         .unwrap_or(default_shell())
         .to_lowercase();
     match normalized.as_str() {
@@ -299,7 +322,7 @@ fn shell_spec(shell: Option<&str>) -> Result<ShellSpec, String> {
                 })
             }
         }
-        _ => Err("shell must be one of: cmd, powershell, sh, bash".into()),
+        _ => Err("shell must be one of: default, cmd, powershell, sh, bash".into()),
     }
 }
 
@@ -346,6 +369,7 @@ fn spawn_session(spec: ShellSpec) -> io::Result<InteractiveSession> {
         stdin,
         rx,
         last_activity: Instant::now(),
+        exit_reason: None,
     })
 }
 
@@ -461,6 +485,7 @@ mod tests {
     #[test]
     fn empty_shell_uses_platform_default() {
         assert!(shell_spec(Some("")).is_ok());
+        assert!(shell_spec(Some("default")).is_ok());
     }
 
     #[test]
@@ -503,6 +528,55 @@ mod tests {
                 saw_ready,
                 "interactive session should return process output"
             );
+        }
+    }
+
+    #[test]
+    fn waits_for_reader_drain_after_child_exit() {
+        #[cfg(not(windows))]
+        {
+            let mut manager = InteractiveManager::new();
+            let task_id = Uuid::new_v4();
+            let task = TaskMessage {
+                id: task_id,
+                command: "pty".into(),
+                parameters: r#"{"shell":"sh"}"#.into(),
+                ..Default::default()
+            };
+            let response = manager.start_from_task(&task);
+            assert_eq!(response.status.as_deref(), Some("processing"));
+
+            manager.handle_inbound(vec![InteractiveMessage {
+                task_id,
+                data: STANDARD.encode(b"printf final-output\nexit\n"),
+                message_type: MESSAGE_INPUT,
+            }]);
+
+            let mut saw_final = false;
+            let mut completed = false;
+            for _ in 0..80 {
+                for msg in manager.drain_outbound() {
+                    if msg.message_type == MESSAGE_OUTPUT || msg.message_type == MESSAGE_ERROR {
+                        let decoded = STANDARD.decode(msg.data).unwrap();
+                        if decoded
+                            .windows(b"final-output".len())
+                            .any(|chunk| chunk == b"final-output")
+                        {
+                            saw_final = true;
+                        }
+                    }
+                }
+                completed |= manager
+                    .drain_responses()
+                    .iter()
+                    .any(|response| response.completed == Some(true));
+                if saw_final && completed {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            assert!(saw_final, "final child output should be sent before close");
+            assert!(completed, "session should eventually complete");
         }
     }
 }
