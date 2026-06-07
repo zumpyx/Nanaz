@@ -7,10 +7,14 @@ const ALERT_SOURCE: &str = "nanaz-p2p";
 
 #[derive(Default)]
 struct PeerRoute {
-    #[cfg(test)]
     c2_profile: String,
     mythic_uuid: Option<Uuid>,
     inbound_to_peer: VecDeque<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum P2pRouteError {
+    UnknownPeer(Uuid),
 }
 
 pub struct P2pManager {
@@ -20,6 +24,12 @@ pub struct P2pManager {
     outbound_edges: VecDeque<EdgeMessage>,
     outbound_alerts: VecDeque<AlertMessage>,
     warned_unroutable: HashSet<Uuid>,
+}
+
+impl Default for P2pManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl P2pManager {
@@ -70,8 +80,7 @@ impl P2pManager {
             || !self.outbound_alerts.is_empty()
     }
 
-    #[cfg(test)]
-    fn register_peer(&mut self, local_uuid: Uuid, c2_profile: &str) {
+    pub fn register_peer(&mut self, local_uuid: Uuid, c2_profile: &str) {
         self.peers.insert(
             local_uuid,
             PeerRoute {
@@ -81,12 +90,24 @@ impl P2pManager {
         );
     }
 
-    #[cfg(test)]
-    fn queue_peer_message(&mut self, local_uuid: Uuid, message: &str) -> Result<(), String> {
+    pub fn unregister_peer(&mut self, local_uuid: Uuid) {
+        if let Some(route) = self.peers.remove(&local_uuid) {
+            self.aliases.remove(&local_uuid);
+            if let Some(mythic_uuid) = route.mythic_uuid {
+                self.aliases.remove(&mythic_uuid);
+            }
+        }
+    }
+
+    pub fn queue_peer_message(
+        &mut self,
+        local_uuid: Uuid,
+        message: &str,
+    ) -> Result<(), P2pRouteError> {
         let route = self
             .peers
             .get(&local_uuid)
-            .ok_or_else(|| "unknown peer route".to_string())?;
+            .ok_or(P2pRouteError::UnknownPeer(local_uuid))?;
         self.outbound_delegates.push_back(DelegateMessage {
             message: message.to_string(),
             c2_profile: Some(route.c2_profile.clone()),
@@ -96,12 +117,54 @@ impl P2pManager {
         Ok(())
     }
 
-    #[cfg(test)]
-    fn take_peer_messages(&mut self, local_uuid: Uuid) -> Vec<String> {
+    pub fn take_peer_messages(&mut self, local_uuid: Uuid) -> Vec<String> {
         self.peers
             .get_mut(&local_uuid)
             .map(|route| route.inbound_to_peer.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    pub fn queue_edge_add(
+        &mut self,
+        source_uuid: Uuid,
+        destination_uuid: Uuid,
+        c2_profile: &str,
+        metadata: Option<String>,
+    ) {
+        self.queue_edge(source_uuid, destination_uuid, "add", c2_profile, metadata);
+    }
+
+    pub fn queue_edge_remove(
+        &mut self,
+        source_uuid: Uuid,
+        destination_uuid: Uuid,
+        c2_profile: &str,
+        metadata: Option<String>,
+    ) {
+        self.queue_edge(
+            source_uuid,
+            destination_uuid,
+            "remove",
+            c2_profile,
+            metadata,
+        );
+    }
+
+    fn queue_edge(
+        &mut self,
+        source_uuid: Uuid,
+        destination_uuid: Uuid,
+        action: &str,
+        c2_profile: &str,
+        metadata: Option<String>,
+    ) {
+        self.outbound_edges.push_back(EdgeMessage {
+            source: source_uuid.to_string(),
+            destination: destination_uuid.to_string(),
+            action: action.into(),
+            c2_profile: c2_profile.into(),
+            metadata,
+        });
     }
 
     fn handle_delegate(&mut self, message: DelegateMessage) {
@@ -177,6 +240,44 @@ mod tests {
     }
 
     #[test]
+    fn unregister_peer_removes_mythic_uuid_alias() {
+        let mut manager = P2pManager::new();
+        let local_uuid = Uuid::new_v4();
+        let mythic_uuid = Uuid::new_v4();
+        manager.register_peer(local_uuid, "tcp");
+
+        manager.handle_inbound(vec![DelegateMessage {
+            message: "server-response".into(),
+            c2_profile: None,
+            uuid: local_uuid,
+            mythic_uuid: Some(mythic_uuid),
+        }]);
+        manager.unregister_peer(local_uuid);
+        manager.handle_inbound(vec![DelegateMessage {
+            message: "late-response".into(),
+            c2_profile: None,
+            uuid: mythic_uuid,
+            mythic_uuid: None,
+        }]);
+
+        assert!(manager.take_peer_messages(local_uuid).is_empty());
+        assert_eq!(manager.drain_alerts().len(), 1);
+    }
+
+    #[test]
+    fn queue_peer_message_rejects_unknown_peer() {
+        let mut manager = P2pManager::new();
+        let peer_uuid = Uuid::new_v4();
+
+        let err = manager
+            .queue_peer_message(peer_uuid, "checkin")
+            .unwrap_err();
+
+        assert_eq!(err, P2pRouteError::UnknownPeer(peer_uuid));
+        assert!(manager.drain_delegates().is_empty());
+    }
+
+    #[test]
     fn alerts_once_for_unroutable_delegate() {
         let mut manager = P2pManager::new();
         let peer_uuid = Uuid::new_v4();
@@ -220,5 +321,24 @@ mod tests {
         assert!(manager.wants_fast_poll());
         assert_eq!(manager.drain_delegates().len(), 1);
         assert_eq!(manager.drain_edges().len(), 1);
+    }
+
+    #[test]
+    fn queues_edge_add_and_remove_messages() {
+        let mut manager = P2pManager::new();
+        let source = Uuid::new_v4();
+        let destination = Uuid::new_v4();
+
+        manager.queue_edge_add(source, destination, "tcp", Some("127.0.0.1:9001".into()));
+        manager.queue_edge_remove(source, destination, "tcp", None);
+
+        let edges = manager.drain_edges();
+        assert_eq!(edges.len(), 2);
+        assert_eq!(edges[0].source, source.to_string());
+        assert_eq!(edges[0].destination, destination.to_string());
+        assert_eq!(edges[0].action, "add");
+        assert_eq!(edges[0].c2_profile, "tcp");
+        assert_eq!(edges[0].metadata.as_deref(), Some("127.0.0.1:9001"));
+        assert_eq!(edges[1].action, "remove");
     }
 }
