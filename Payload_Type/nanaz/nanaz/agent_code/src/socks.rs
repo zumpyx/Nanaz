@@ -324,6 +324,9 @@ fn parse_connect_target(data: &[u8]) -> io::Result<ConnectTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn parses_ipv4_connect_request() {
@@ -351,5 +354,57 @@ mod tests {
             }
             _ => panic!("expected domain target"),
         }
+    }
+
+    #[test]
+    fn proxies_data_to_tcp_target() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4];
+            stream.read_exact(&mut buf).unwrap();
+            assert_eq!(&buf, b"ping");
+            stream.write_all(b"pong").unwrap();
+        });
+
+        let mut manager = SocksManager::new();
+        let mut request = vec![5, 1, 0, 1, 127, 0, 0, 1];
+        request.extend_from_slice(&port.to_be_bytes());
+        manager.handle_inbound(vec![SocksMessage {
+            server_id: 7,
+            exit: false,
+            data: Some(STANDARD.encode(request)),
+        }]);
+        let first = manager.drain_outbound();
+        assert_eq!(first.len(), 1);
+        assert_eq!(
+            STANDARD.decode(first[0].data.as_ref().unwrap()).unwrap(),
+            NEGOTIATION_SUCCESS
+        );
+
+        manager.handle_inbound(vec![SocksMessage {
+            server_id: 7,
+            exit: false,
+            data: Some(STANDARD.encode(b"ping")),
+        }]);
+
+        let mut got_pong = false;
+        for _ in 0..20 {
+            let outbound = manager.drain_outbound();
+            if outbound.iter().any(|msg| {
+                msg.data
+                    .as_ref()
+                    .and_then(|data| STANDARD.decode(data).ok())
+                    .as_deref()
+                    == Some(b"pong")
+            }) {
+                got_pong = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(got_pong, "SOCKS manager should return target response");
+        server.join().unwrap();
     }
 }

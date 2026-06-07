@@ -355,6 +355,9 @@ fn flush_pending_writes(connection: &mut RpfwdConnection) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::Duration;
     use uuid::Uuid;
 
     #[test]
@@ -368,5 +371,67 @@ mod tests {
         };
         let response = manager.start_from_task(&task);
         assert_eq!(response.status.as_deref(), Some("error"));
+    }
+
+    #[test]
+    fn forwards_local_connection_data_through_messages() {
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = reserved.local_addr().unwrap().port();
+        drop(reserved);
+
+        let mut manager = RpfwdManager::new();
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "rpfwd".into(),
+            parameters: format!(r#"{{"port":{port}}}"#),
+            ..Default::default()
+        };
+        let response = manager.start_from_task(&task);
+        assert_eq!(response.status.as_deref(), Some("completed"));
+
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.write_all(b"hello").unwrap();
+            let mut buf = [0u8; 5];
+            stream.read_exact(&mut buf).unwrap();
+            assert_eq!(&buf, b"world");
+        });
+
+        let mut server_id = None;
+        for _ in 0..20 {
+            let outbound = manager.drain_outbound();
+            if let Some(msg) = outbound
+                .iter()
+                .find(|msg| msg.data.as_deref() == Some("") || msg.data.is_some())
+            {
+                server_id = Some(msg.server_id);
+                if outbound.iter().any(|msg| {
+                    msg.data
+                        .as_ref()
+                        .and_then(|data| STANDARD.decode(data).ok())
+                        .as_deref()
+                        == Some(b"hello")
+                }) {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let server_id = server_id.expect("rpfwd should register a server_id");
+
+        manager.handle_inbound(vec![ReversePortForwardMessage {
+            server_id,
+            exit: false,
+            data: Some(STANDARD.encode(b"world")),
+            port: Some(port as u32),
+        }]);
+        for _ in 0..20 {
+            manager.drain_outbound();
+            if client.is_finished() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        client.join().unwrap();
     }
 }
