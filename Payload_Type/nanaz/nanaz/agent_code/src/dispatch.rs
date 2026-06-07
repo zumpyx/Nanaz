@@ -38,6 +38,8 @@ mod pwd;
 mod resolve;
 #[path = "commands/rm.rs"]
 mod rm;
+#[path = "commands/rpfwd.rs"]
+mod rpfwd;
 #[path = "commands/sleep.rs"]
 mod sleep;
 #[path = "commands/sysinfo.rs"]
@@ -128,6 +130,7 @@ fn dispatch_inner(task: &TaskMessage) -> TaskResponse {
         "pwd" => pwd::handle(task),
         "resolve" => resolve::handle(task),
         "rm" => rm::handle(task),
+        "rpfwd" => rpfwd::handle(task),
         "cmd" => process::handle_shell(task, process::ShellKind::Cmd),
         "powershell" => process::handle_shell(task, process::ShellKind::PowerShell),
         "sh" => process::handle_shell(task, process::ShellKind::Sh),

@@ -131,6 +131,11 @@ COMMAND_HELP = [
         "rm [path] [-r] [--confirm-destructive]",
         "Remove a file or directory.",
     ),
+    (
+        "rpfwd",
+        "rpfwd -Port [port] -RemoteIP [ip] -RemotePort [port]",
+        "Start or stop a reverse port forward.",
+    ),
     ("sh", "sh [command]", "Run a POSIX shell command."),
     ("sleep", "sleep [seconds] [jitter]", "Set callback sleep and jitter."),
     ("socks", "socks -Port [port] -Action start", "Start or stop a SOCKS5 listener."),

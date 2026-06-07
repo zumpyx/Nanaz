@@ -64,6 +64,11 @@ const COMMANDS: &[(&str, &str, &str)] = &[
         "rm [path] [-r] [--confirm-destructive]",
         "Remove a file or directory.",
     ),
+    (
+        "rpfwd",
+        "rpfwd -Port [port] -RemoteIP [ip] -RemotePort [port]",
+        "Start or stop a reverse port forward.",
+    ),
     ("sh", "sh [command]", "Run a POSIX shell command."),
     (
         "sleep",

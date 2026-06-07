@@ -21,12 +21,14 @@ macro_rules! info {
 extern crate alloc;
 
 mod agent;
+mod auxiliary;
 mod c2;
 mod common;
 mod config;
 mod dispatch;
 mod error;
 pub use error::{Error, Result};
+mod rpfwd;
 mod socks;
 mod sys;
 
