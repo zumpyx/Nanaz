@@ -30,6 +30,7 @@ mod error;
 pub use error::{Error, Result};
 mod interactive;
 mod p2p;
+pub mod p2p_tcp;
 mod protocol_pump;
 mod rpfwd;
 mod socks;
