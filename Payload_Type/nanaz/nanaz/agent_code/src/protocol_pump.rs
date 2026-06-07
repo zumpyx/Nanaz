@@ -73,10 +73,12 @@ impl ProtocolPump {
     }
 
     pub fn build_shared(&mut self) -> AgentExtras {
-        let mut shared = AgentExtras::default();
-        shared.socks = StreamDriver::drain_outbound(&mut self.socks);
-        shared.rpfwd = StreamDriver::drain_outbound(&mut self.rpfwd);
-        shared.interactive = StreamDriver::drain_outbound(&mut self.interactive);
+        let mut shared = AgentExtras {
+            socks: StreamDriver::drain_outbound(&mut self.socks),
+            rpfwd: StreamDriver::drain_outbound(&mut self.rpfwd),
+            interactive: StreamDriver::drain_outbound(&mut self.interactive),
+            ..Default::default()
+        };
         self.pending.extend(self.interactive.drain_responses());
         self.auxiliary.drain_into(&mut shared);
         shared
