@@ -89,10 +89,10 @@ impl HttpProfile {
         }
         let mut url = String::from("http://");
         if !self.proxy_user.is_empty() {
-            url.push_str(&self.proxy_user);
+            url.push_str(&url_encode(&self.proxy_user));
             if !self.proxy_pass.is_empty() {
                 url.push(':');
-                url.push_str(&self.proxy_pass);
+                url.push_str(&url_encode(&self.proxy_pass));
             }
             url.push('@');
         }
@@ -184,5 +184,54 @@ impl C2Transport for HttpProfile {
             self.proxy_url().as_deref(),
             Some(packed),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile() -> HttpProfile {
+        HttpProfile {
+            aes_psk: None,
+            callback_host: "http://127.0.0.1".into(),
+            callback_interval: 10,
+            callback_jitter: 0,
+            callback_port: 80,
+            encrypted_exchange_check: false,
+            get_uri: "index".into(),
+            headers: Default::default(),
+            killdate: "".into(),
+            post_uri: "data".into(),
+            proxy_host: "".into(),
+            proxy_pass: "".into(),
+            proxy_port: "".into(),
+            proxy_user: "".into(),
+            query_path_name: "q".into(),
+            external_ip_check: false,
+        }
+    }
+
+    #[test]
+    fn proxy_url_encodes_credentials() {
+        let mut profile = profile();
+        profile.proxy_host = "proxy.local".into();
+        profile.proxy_port = "8080".into();
+        profile.proxy_user = "user@example.com".into();
+        profile.proxy_pass = "p@ss:word".into();
+
+        assert_eq!(
+            profile.proxy_url().as_deref(),
+            Some("http://user%40example.com:p%40ss%3Aword@proxy.local:8080")
+        );
+    }
+
+    #[test]
+    fn empty_proxy_host_disables_proxy() {
+        let mut profile = profile();
+        profile.proxy_user = "user".into();
+        profile.proxy_pass = "pass".into();
+
+        assert_eq!(profile.proxy_url(), None);
     }
 }
