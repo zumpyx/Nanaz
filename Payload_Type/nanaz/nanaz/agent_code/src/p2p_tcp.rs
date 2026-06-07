@@ -117,19 +117,21 @@ impl TcpFrameDecoder {
         chunk_index: u32,
         payload: Vec<u8>,
     ) -> Result<Option<Vec<u8>>, TcpFrameError> {
-        let assembly = self
+        if self
             .current
-            .get_or_insert_with(|| ChunkAssembly::new(total_chunks));
-
-        if assembly.total_chunks != total_chunks {
+            .as_ref()
+            .is_none_or(|assembly| assembly.total_chunks != total_chunks)
+        {
             self.current = Some(ChunkAssembly::new(total_chunks));
         }
 
-        let assembly = self.current.as_mut().expect("assembly exists");
-        assembly.push(chunk_index, payload)?;
-        if assembly.is_complete() {
-            let assembly = self.current.take().expect("assembly exists");
-            return Ok(Some(assembly.into_message()));
+        if let Some(assembly) = self.current.as_mut() {
+            assembly.push(chunk_index, payload)?;
+            if assembly.is_complete()
+                && let Some(assembly) = self.current.take()
+            {
+                return Ok(Some(assembly.into_message()));
+            }
         }
         Ok(None)
     }
