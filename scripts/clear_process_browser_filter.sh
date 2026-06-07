@@ -37,7 +37,7 @@ if [[ -z "${TOKEN}" ]]; then
 fi
 
 curl -ksS "${GRAPHQL_URL}" \
-  -H "Authorization: Bearer ${TOKEN}" \
+  -H "apitoken: ${TOKEN}" \
   -H "Content-Type: application/json" \
   --data-binary '{"query":"mutation ClearProcessBrowserFilter { updateOperatorPreferences(preferences: {process_browser_filter_options: {}}) { status error } }"}'
 echo

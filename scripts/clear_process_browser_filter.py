@@ -50,7 +50,7 @@ def clear_filter(url, token, verify_tls):
         url,
         data=body,
         headers={
-            "Authorization": f"Bearer {token}",
+            "apitoken": token,
             "Content-Type": "application/json",
         },
         method="POST",

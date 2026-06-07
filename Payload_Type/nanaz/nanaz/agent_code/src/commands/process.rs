@@ -11,6 +11,7 @@ use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::common::pathguard::normalize_user_path;
 use crate::sys::encoding::decode_output;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -142,12 +143,20 @@ pub fn handle_execute(task: &TaskMessage) -> TaskResponse {
     } else {
         params.args
     };
+    let executable = normalize_user_path(path);
     let display = if args.is_empty() {
-        path.to_string()
+        executable.clone()
     } else {
-        format!("{} {}", path, args.join(" "))
+        format!("{} {}", executable, args.join(" "))
     };
-    run_child(task.id, path, args, params.timeout, path, &display)
+    run_child(
+        task.id,
+        &executable,
+        args,
+        params.timeout,
+        &executable,
+        &display,
+    )
 }
 
 fn run_child(

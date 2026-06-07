@@ -99,76 +99,6 @@ def _extract_aes_psk(value):
     return key or None
 
 
-COMMAND_HELP = [
-    ("bash", "bash [command]", "Run a Bash command."),
-    ("cat", "cat [path]", "Read and display file contents."),
-    ("cd", "cd [path]", "Change the current working directory."),
-    ("cmd", "cmd [command]", "Run a Windows cmd.exe command."),
-    ("cp", "cp [src] [dst]", "Copy a file."),
-    ("download", "download [path]", "Download a file from the target."),
-    ("drives", "drives", "List available filesystem roots / drives."),
-    ("env", "env [filter_key]", "List environment variables."),
-    ("execute", "execute [path] [arguments]", "Execute a process."),
-    (
-        "execute_assembly",
-        "execute_assembly [Assembly.exe] [args]",
-        "Execute a .NET assembly.",
-    ),
-    ("exit", "exit [process]", "Exit the agent or callback."),
-    ("help", "help [command]", "Show command help."),
-    ("kill", "kill <pid> [-9]", "Kill a process."),
-    ("ls", "ls [path]", "List files and directories."),
-    ("mkdir", "mkdir [path]", "Create a directory."),
-    ("mv", "mv [src] [dst]", "Move or rename a file."),
-    ("netstat", "netstat", "List network connections."),
-    ("powerpick", "powerpick [command]", "Run PowerShell through CLR hosting."),
-    ("powershell", "powershell [command]", "Run a PowerShell command."),
-    ("ps", "ps", "List processes for Mythic's process browser."),
-    ("pty", "pty [sh|bash|cmd|powershell]", "Start an interactive shell task."),
-    ("pwd", "pwd", "Print the current working directory."),
-    ("resolve", "resolve [hostname]", "Resolve a hostname."),
-    (
-        "rm",
-        "rm [path] [-r] [--confirm-destructive]",
-        "Remove a file or directory.",
-    ),
-    (
-        "rpfwd",
-        "rpfwd -Port [port] -RemoteIP [ip] -RemotePort [port]",
-        "Start or stop a reverse port forward.",
-    ),
-    ("sh", "sh [command]", "Run a POSIX shell command."),
-    ("sleep", "sleep [seconds] [jitter]", "Set callback sleep and jitter."),
-    ("socks", "socks -Port [port] -Action start", "Start or stop a SOCKS5 listener."),
-    ("sysinfo", "sysinfo", "Gather system information."),
-    ("tree", "tree [path]", "Recursively list a directory tree."),
-    ("upload", "upload [destination_path]", "Upload a file to the target."),
-    ("wget", "wget [url] [destination_path]", "Download a URL to disk."),
-    ("whoami", "whoami", "Print the current user."),
-]
-
-
-def _format_help(command_names: list[str] | None = None) -> str:
-    wanted = {name.strip().lower() for name in command_names or [] if name.strip()}
-    rows = [
-        row
-        for row in COMMAND_HELP
-        if not wanted or row[0] in wanted
-    ]
-    if not rows:
-        missing = ", ".join(sorted(wanted))
-        return f"unknown command(s): {missing}"
-
-    if len(rows) == 1 and wanted:
-        command, usage, description = rows[0]
-        return f"{command}\nUsage: {usage}\n{description}"
-
-    lines = ["Available commands:"]
-    for command, usage, description in rows:
-        lines.append(f"  {command:<16} {usage:<42} {description}")
-    return "\n".join(lines)
-
-
 class Nanaz(PayloadType):
     name = "nanaz"
     file_extension = "exe"
@@ -202,14 +132,6 @@ class Nanaz(PayloadType):
     agent_path = MYTHIC_PATH
     agent_icon_path = agent_path / "agent_functions" / "nanaz.svg"
     agent_code_path = AGENT_CODE_PATH
-
-    async def command_help_function(
-        self, msg: HelpFunctionMessage
-    ) -> HelpFunctionMessageResponse:
-        return HelpFunctionMessageResponse(
-            output=_format_help(msg.CommandNames),
-            success=True,
-        )
 
     async def build(self) -> BuildResponse:
         resp = BuildResponse(status=BuildStatus.Error)
