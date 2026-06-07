@@ -579,4 +579,41 @@ mod tests {
             assert!(completed, "session should eventually complete");
         }
     }
+
+    #[test]
+    fn completion_drain_keeps_exit_message_available() {
+        #[cfg(not(windows))]
+        {
+            let mut manager = InteractiveManager::new();
+            let task_id = Uuid::new_v4();
+            let task = TaskMessage {
+                id: task_id,
+                command: "pty".into(),
+                parameters: r#"{"shell":"sh"}"#.into(),
+                ..Default::default()
+            };
+            let response = manager.start_from_task(&task);
+            assert_eq!(response.status.as_deref(), Some("processing"));
+
+            manager.handle_inbound(vec![InteractiveMessage {
+                task_id,
+                data: String::new(),
+                message_type: MESSAGE_EXIT,
+            }]);
+
+            let responses = manager.drain_responses();
+            assert!(
+                responses
+                    .iter()
+                    .any(|response| response.completed == Some(true))
+            );
+            let outbound = manager.drain_outbound();
+            assert!(
+                outbound
+                    .iter()
+                    .any(|message| message.message_type == MESSAGE_EXIT),
+                "exit message must remain available after draining completion responses"
+            );
+        }
+    }
 }
