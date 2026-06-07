@@ -12,12 +12,14 @@ const MAX_READ_PER_CONN: usize = 32 * 1024;
 const MAX_CONNECTIONS: usize = 128;
 const MAX_PENDING_WRITE_BYTES: usize = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const NEGOTIATION_SUCCESS: [u8; 10] = [0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
 const NEGOTIATION_FAILURE: [u8; 10] = [0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0];
 
 struct SocksConnection {
     stream: TcpStream,
     pending_writes: VecDeque<Vec<u8>>,
+    last_activity: Instant,
 }
 
 pub struct SocksManager {
@@ -87,6 +89,7 @@ impl SocksManager {
                     return;
                 }
                 connection.pending_writes.push_back(decoded);
+                connection.last_activity = Instant::now();
                 if flush_pending_writes(connection).is_err() {
                     self.close(message.server_id, true);
                 }
@@ -112,6 +115,7 @@ impl SocksManager {
                     SocksConnection {
                         stream,
                         pending_writes: VecDeque::new(),
+                        last_activity: Instant::now(),
                     },
                 );
             }
@@ -124,6 +128,9 @@ impl SocksManager {
         for id in ids {
             let mut close = false;
             if let Some(connection) = self.connections.get_mut(&id) {
+                if connection.last_activity.elapsed() >= CONNECTION_IDLE_TIMEOUT {
+                    close = true;
+                }
                 if flush_pending_writes(connection).is_err() {
                     close = true;
                 }
@@ -146,6 +153,9 @@ impl SocksManager {
                         break;
                     }
                     Ok(n) => {
+                        if let Some(connection) = self.connections.get_mut(&id) {
+                            connection.last_activity = Instant::now();
+                        }
                         self.queue_data(id, &buf[..n], false);
                         if n < MAX_READ_PER_CONN {
                             break;
@@ -221,6 +231,7 @@ fn flush_pending_writes(connection: &mut SocksConnection) -> io::Result<()> {
                 }
                 Ok(n) => {
                     data.drain(..n);
+                    connection.last_activity = Instant::now();
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     connection.pending_writes.push_front(data);

