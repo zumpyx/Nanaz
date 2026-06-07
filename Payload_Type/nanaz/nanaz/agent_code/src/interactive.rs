@@ -22,6 +22,7 @@ const MAX_READ_CHUNK: usize = 8192;
 const DEFAULT_OUTPUT_BATCH_BYTES: usize = 64 * 1024;
 const MIN_OUTPUT_BATCH_BYTES: usize = MAX_READ_CHUNK;
 const MAX_OUTPUT_BATCH_BYTES: usize = 1024 * 1024;
+const OUTPUT_BATCH_FLUSH_DELAY: Duration = Duration::from_millis(75);
 const MAX_SESSIONS: usize = 16;
 const OUTPUT_QUEUE_CAPACITY: usize = 256;
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -32,7 +33,7 @@ struct InteractiveSession {
     rx: Receiver<InteractiveEvent>,
     last_activity: Instant,
     exit_reason: Option<String>,
-    max_output_batch_bytes: usize,
+    output_batch: InteractiveOutputBatch,
 }
 
 enum InteractiveEvent {
@@ -176,19 +177,21 @@ impl InteractiveManager {
         for task_id in ids {
             let mut close_reason = None;
             if let Some(session) = self.sessions.get_mut(&task_id) {
-                let mut batch =
-                    InteractiveOutputBatch::new(task_id, session.max_output_batch_bytes);
                 let readers_closed = loop {
                     match session.rx.try_recv() {
                         Ok(event) => {
                             session.last_activity = Instant::now();
-                            batch.push(event, &mut self.outbound);
+                            session
+                                .output_batch
+                                .push(task_id, event, &mut self.outbound);
                         }
                         Err(TryRecvError::Empty) => break false,
                         Err(TryRecvError::Disconnected) => break true,
                     }
                 };
-                batch.flush(&mut self.outbound);
+                session
+                    .output_batch
+                    .flush_if_idle(task_id, &mut self.outbound);
 
                 if session.exit_reason.is_none() {
                     match session.child.try_wait() {
@@ -214,6 +217,9 @@ impl InteractiveManager {
                 }
             }
             if let Some(reason) = close_reason {
+                if let Some(session) = self.sessions.get_mut(&task_id) {
+                    session.output_batch.flush(task_id, &mut self.outbound);
+                }
                 self.close(task_id, true, &reason);
             }
         }
@@ -371,28 +377,33 @@ fn spawn_session(spec: ShellSpec, max_output_batch_bytes: usize) -> io::Result<I
         rx,
         last_activity: Instant::now(),
         exit_reason: None,
-        max_output_batch_bytes,
+        output_batch: InteractiveOutputBatch::new(max_output_batch_bytes),
     })
 }
 
 struct InteractiveOutputBatch {
-    task_id: Uuid,
     message_type: Option<u8>,
     data: Vec<u8>,
     max_bytes: usize,
+    last_update: Option<Instant>,
 }
 
 impl InteractiveOutputBatch {
-    fn new(task_id: Uuid, max_bytes: usize) -> Self {
+    fn new(max_bytes: usize) -> Self {
         Self {
-            task_id,
             message_type: None,
             data: Vec::new(),
             max_bytes,
+            last_update: None,
         }
     }
 
-    fn push(&mut self, event: InteractiveEvent, outbound: &mut VecDeque<InteractiveMessage>) {
+    fn push(
+        &mut self,
+        task_id: Uuid,
+        event: InteractiveEvent,
+        outbound: &mut VecDeque<InteractiveMessage>,
+    ) {
         let (message_type, data) = match event {
             InteractiveEvent::Output(data) => (MESSAGE_OUTPUT, data),
             InteractiveEvent::Error(data) => (MESSAGE_ERROR, data),
@@ -404,24 +415,35 @@ impl InteractiveOutputBatch {
             .is_some_and(|current| current != message_type)
             || would_exceed
         {
-            self.flush(outbound);
+            self.flush(task_id, outbound);
         }
 
         self.message_type = Some(message_type);
         self.data.extend_from_slice(&data);
+        self.last_update = Some(Instant::now());
         if self.data.len() >= self.max_bytes {
-            self.flush(outbound);
+            self.flush(task_id, outbound);
         }
     }
 
-    fn flush(&mut self, outbound: &mut VecDeque<InteractiveMessage>) {
+    fn flush_if_idle(&mut self, task_id: Uuid, outbound: &mut VecDeque<InteractiveMessage>) {
+        if self
+            .last_update
+            .is_some_and(|last_update| last_update.elapsed() >= OUTPUT_BATCH_FLUSH_DELAY)
+        {
+            self.flush(task_id, outbound);
+        }
+    }
+
+    fn flush(&mut self, task_id: Uuid, outbound: &mut VecDeque<InteractiveMessage>) {
         if let Some(message_type) = self.message_type {
             if !self.data.is_empty() {
-                outbound.push_back(interactive_message(self.task_id, message_type, &self.data));
+                outbound.push_back(interactive_message(task_id, message_type, &self.data));
             }
         }
         self.message_type = None;
         self.data.clear();
+        self.last_update = None;
     }
 }
 
@@ -554,11 +576,19 @@ mod tests {
     fn output_batch_merges_consecutive_events() {
         let task_id = Uuid::new_v4();
         let mut outbound = VecDeque::new();
-        let mut batch = InteractiveOutputBatch::new(task_id, 64);
+        let mut batch = InteractiveOutputBatch::new(64);
 
-        batch.push(InteractiveEvent::Output(b"one".to_vec()), &mut outbound);
-        batch.push(InteractiveEvent::Output(b"two".to_vec()), &mut outbound);
-        batch.flush(&mut outbound);
+        batch.push(
+            task_id,
+            InteractiveEvent::Output(b"one".to_vec()),
+            &mut outbound,
+        );
+        batch.push(
+            task_id,
+            InteractiveEvent::Output(b"two".to_vec()),
+            &mut outbound,
+        );
+        batch.flush(task_id, &mut outbound);
 
         assert_eq!(outbound.len(), 1);
         let message = outbound.pop_front().unwrap();
@@ -570,15 +600,42 @@ mod tests {
     fn output_batch_preserves_stderr_boundaries() {
         let task_id = Uuid::new_v4();
         let mut outbound = VecDeque::new();
-        let mut batch = InteractiveOutputBatch::new(task_id, 64);
+        let mut batch = InteractiveOutputBatch::new(64);
 
-        batch.push(InteractiveEvent::Output(b"out".to_vec()), &mut outbound);
-        batch.push(InteractiveEvent::Error(b"err".to_vec()), &mut outbound);
-        batch.flush(&mut outbound);
+        batch.push(
+            task_id,
+            InteractiveEvent::Output(b"out".to_vec()),
+            &mut outbound,
+        );
+        batch.push(
+            task_id,
+            InteractiveEvent::Error(b"err".to_vec()),
+            &mut outbound,
+        );
+        batch.flush(task_id, &mut outbound);
 
         assert_eq!(outbound.len(), 2);
         assert_eq!(outbound[0].message_type, MESSAGE_OUTPUT);
         assert_eq!(outbound[1].message_type, MESSAGE_ERROR);
+    }
+
+    #[test]
+    fn output_batch_waits_for_idle_before_flush() {
+        let task_id = Uuid::new_v4();
+        let mut outbound = VecDeque::new();
+        let mut batch = InteractiveOutputBatch::new(64);
+
+        batch.push(
+            task_id,
+            InteractiveEvent::Output(b"one".to_vec()),
+            &mut outbound,
+        );
+        batch.flush_if_idle(task_id, &mut outbound);
+        assert!(outbound.is_empty());
+
+        std::thread::sleep(OUTPUT_BATCH_FLUSH_DELAY + Duration::from_millis(10));
+        batch.flush_if_idle(task_id, &mut outbound);
+        assert_eq!(outbound.len(), 1);
     }
 
     #[test]
