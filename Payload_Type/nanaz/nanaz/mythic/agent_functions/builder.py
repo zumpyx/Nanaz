@@ -15,6 +15,51 @@ TARGETS = {
     "Linux": "x86_64-unknown-linux-musl",
 }
 
+COMMON_COMMANDS = [
+    "cat",
+    "cd",
+    "cp",
+    "download",
+    "drives",
+    "env",
+    "execute",
+    "exit",
+    "help",
+    "kill",
+    "ls",
+    "tree",
+    "mkdir",
+    "mv",
+    "netstat",
+    "ps",
+    "pty",
+    "pwd",
+    "resolve",
+    "rm",
+    "rpfwd",
+    "sleep",
+    "socks",
+    "sysinfo",
+    "upload",
+    "wget",
+    "whoami",
+]
+
+OS_COMMANDS = {
+    "Windows": COMMON_COMMANDS
+    + [
+        "cmd",
+        "execute_assembly",
+        "powerpick",
+        "powershell",
+    ],
+    "Linux": COMMON_COMMANDS
+    + [
+        "bash",
+        "sh",
+    ],
+}
+
 # Resolve paths from this file's location so the builder works regardless of
 # the container's CWD. Layout: nanaz/{agent_code, mythic}. builder.py lives at
 # nanaz/mythic/agent_functions/builder.py, so three parents reaches nanaz/.
@@ -99,6 +144,25 @@ def _extract_aes_psk(value):
     return key or None
 
 
+def _commands_for_os(target_os: str, requested) -> tuple[list[str], list[str]]:
+    """Return the commands that should actually be attached to this payload.
+
+    Mythic records command `supported_os`, but older/stale UI state can still
+    submit an incompatible command list at build time. The build response is
+    the last authoritative point where we can correct that list before Mythic
+    associates commands with the payload/callback.
+    """
+    allowed = OS_COMMANDS[target_os]
+    requested = list(requested or [])
+    if not requested:
+        return list(allowed), []
+
+    requested_set = set(requested)
+    selected = [command for command in allowed if command in requested_set]
+    dropped = sorted(command for command in requested if command not in allowed)
+    return selected, dropped
+
+
 class Nanaz(PayloadType):
     name = "nanaz"
     file_extension = "exe"
@@ -147,6 +211,11 @@ class Nanaz(PayloadType):
                 raise Exception(
                     f"unsupported selected_os '{selected}'; only Windows and Linux are supported"
                 )
+            selected_commands, dropped_commands = _commands_for_os(
+                target_os,
+                self.commands.get_commands() if self.commands else [],
+            )
+            resp.updated_command_list = selected_commands
 
             if len(self.c2info) != 1:
                 raise Exception(
@@ -228,6 +297,11 @@ class Nanaz(PayloadType):
                 name = f"{name}.exe"
             resp.updated_filename = name
             resp.status = BuildStatus.Success
+            if dropped_commands:
+                resp.build_message = (
+                    f"Removed commands unsupported on {target_os}: "
+                    f"{', '.join(dropped_commands)}"
+                )
 
         except Exception as e:
             resp.build_message = f"build failed: {e}\n{traceback.format_exc()}"

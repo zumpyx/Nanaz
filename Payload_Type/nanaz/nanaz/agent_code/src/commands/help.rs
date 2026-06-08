@@ -12,92 +12,229 @@ struct Params {
     command: Option<String>,
 }
 
-const COMMANDS: &[(&str, &str, &str)] = &[
-    ("bash", "bash [command]", "Run a Bash command."),
-    ("cat", "cat [path]", "Read and display file contents."),
-    ("cd", "cd [path]", "Change the current working directory."),
-    ("cmd", "cmd [command]", "Run a Windows cmd.exe command."),
-    ("cp", "cp [src] [dst]", "Copy a file."),
-    (
-        "download",
-        "download [path]",
-        "Download a file from the target.",
-    ),
-    (
-        "drives",
-        "drives",
-        "List available filesystem roots / drives.",
-    ),
-    ("env", "env [filter_key]", "List environment variables."),
-    (
-        "execute",
-        "execute [path] [arguments]",
-        "Execute a process.",
-    ),
-    (
-        "execute_assembly",
-        "execute_assembly [Assembly.exe] [args]",
-        "Execute a .NET assembly.",
-    ),
-    ("exit", "exit [process]", "Exit the agent or callback."),
-    ("help", "help [command]", "Show command help."),
-    ("kill", "kill <pid> [-9]", "Kill a process."),
-    ("ls", "ls [path]", "List files and directories."),
-    ("mkdir", "mkdir [path]", "Create a directory."),
-    ("mv", "mv [src] [dst]", "Move or rename a file."),
-    ("netstat", "netstat", "List network connections."),
-    (
-        "powerpick",
-        "powerpick [command]",
-        "Run PowerShell through CLR hosting.",
-    ),
-    (
-        "powershell",
-        "powershell [command]",
-        "Run a PowerShell command.",
-    ),
-    ("ps", "ps", "List processes for Mythic's process browser."),
-    (
-        "pty",
-        "pty [sh|bash|cmd|powershell]",
-        "Start an interactive shell task.",
-    ),
-    ("pwd", "pwd", "Print the current working directory."),
-    ("resolve", "resolve [hostname]", "Resolve a hostname."),
-    (
-        "rm",
-        "rm [path] [-r] [--confirm-destructive]",
-        "Remove a file or directory.",
-    ),
-    (
-        "rpfwd",
-        "rpfwd -Port [port] -RemoteIP [ip] -RemotePort [port]",
-        "Start or stop a reverse port forward.",
-    ),
-    ("sh", "sh [command]", "Run a POSIX shell command."),
-    (
-        "sleep",
-        "sleep [seconds] [jitter]",
-        "Set callback sleep and jitter.",
-    ),
-    (
-        "socks",
-        "socks -Port [port] -Action start",
-        "Start or stop a SOCKS5 listener.",
-    ),
-    ("sysinfo", "sysinfo", "Gather system information."),
-    ("tree", "tree [path]", "Recursively list a directory tree."),
-    (
-        "upload",
-        "upload [destination_path]",
-        "Upload a file to the target.",
-    ),
-    (
-        "wget",
-        "wget [url] [destination_path]",
-        "Download a URL to disk.",
-    ),
-    ("whoami", "whoami", "Print the current user."),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandOs {
+    All,
+    Linux,
+    Windows,
+}
+
+struct CommandHelp {
+    name: &'static str,
+    usage: &'static str,
+    description: &'static str,
+    os: CommandOs,
+}
+
+impl CommandHelp {
+    fn supported_on_current_os(&self) -> bool {
+        match self.os {
+            CommandOs::All => true,
+            CommandOs::Linux => cfg!(target_os = "linux"),
+            CommandOs::Windows => cfg!(windows),
+        }
+    }
+}
+
+const COMMANDS: &[CommandHelp] = &[
+    CommandHelp {
+        name: "bash",
+        usage: "bash [command]",
+        description: "Run a Bash command.",
+        os: CommandOs::Linux,
+    },
+    CommandHelp {
+        name: "cat",
+        usage: "cat [path]",
+        description: "Read and display file contents.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "cd",
+        usage: "cd [path]",
+        description: "Change the current working directory.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "cmd",
+        usage: "cmd [command]",
+        description: "Run a Windows cmd.exe command.",
+        os: CommandOs::Windows,
+    },
+    CommandHelp {
+        name: "cp",
+        usage: "cp [src] [dst]",
+        description: "Copy a file.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "download",
+        usage: "download [path]",
+        description: "Download a file from the target.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "drives",
+        usage: "drives",
+        description: "List available filesystem roots / drives.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "env",
+        usage: "env [filter_key]",
+        description: "List environment variables.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "execute",
+        usage: "execute [path] [arguments]",
+        description: "Execute a process.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "execute_assembly",
+        usage: "execute_assembly [Assembly.exe] [args]",
+        description: "Execute a .NET assembly.",
+        os: CommandOs::Windows,
+    },
+    CommandHelp {
+        name: "exit",
+        usage: "exit [process]",
+        description: "Exit the agent or callback.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "help",
+        usage: "help [command]",
+        description: "Show command help.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "kill",
+        usage: "kill <pid> [-9]",
+        description: "Kill a process.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "ls",
+        usage: "ls [path]",
+        description: "List files and directories.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "mkdir",
+        usage: "mkdir [path]",
+        description: "Create a directory.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "mv",
+        usage: "mv [src] [dst]",
+        description: "Move or rename a file.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "netstat",
+        usage: "netstat",
+        description: "List network connections.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "powerpick",
+        usage: "powerpick [command]",
+        description: "Run PowerShell through CLR hosting.",
+        os: CommandOs::Windows,
+    },
+    CommandHelp {
+        name: "powershell",
+        usage: "powershell [command]",
+        description: "Run a PowerShell command.",
+        os: CommandOs::Windows,
+    },
+    CommandHelp {
+        name: "ps",
+        usage: "ps",
+        description: "List processes for Mythic's process browser.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "pty",
+        usage: "pty [sh|bash|cmd|powershell]",
+        description: "Start an interactive shell task.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "pwd",
+        usage: "pwd",
+        description: "Print the current working directory.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "resolve",
+        usage: "resolve [hostname]",
+        description: "Resolve a hostname.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "rm",
+        usage: "rm [path] [-r] [--confirm-destructive]",
+        description: "Remove a file or directory.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "rpfwd",
+        usage: "rpfwd -Port [port] -RemoteIP [ip] -RemotePort [port]",
+        description: "Start or stop a reverse port forward.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "sh",
+        usage: "sh [command]",
+        description: "Run a POSIX shell command.",
+        os: CommandOs::Linux,
+    },
+    CommandHelp {
+        name: "sleep",
+        usage: "sleep [seconds] [jitter]",
+        description: "Set callback sleep and jitter.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "socks",
+        usage: "socks -Port [port] -Action start",
+        description: "Start or stop a SOCKS5 listener.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "sysinfo",
+        usage: "sysinfo",
+        description: "Gather system information.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "tree",
+        usage: "tree [path]",
+        description: "Recursively list a directory tree.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "upload",
+        usage: "upload [destination_path]",
+        description: "Upload a file to the target.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "wget",
+        usage: "wget [url] [destination_path]",
+        description: "Download a URL to disk.",
+        os: CommandOs::All,
+    },
+    CommandHelp {
+        name: "whoami",
+        usage: "whoami",
+        description: "Print the current user.",
+        os: CommandOs::All,
+    },
 ];
 
 fn parse_params(task: &TaskMessage) -> Result<Params, String> {
@@ -113,17 +250,29 @@ fn parse_params(task: &TaskMessage) -> Result<Params, String> {
 fn all_help() -> String {
     let mut lines = Vec::with_capacity(COMMANDS.len() + 1);
     lines.push("Available commands:".to_string());
-    for (name, usage, description) in COMMANDS {
-        lines.push(format!("  {name:<16} {usage:<42} {description}"));
+    for command in COMMANDS
+        .iter()
+        .filter(|command| command.supported_on_current_os())
+    {
+        lines.push(format!(
+            "  {:<16} {:<42} {}",
+            command.name, command.usage, command.description
+        ));
     }
     lines.join("\n")
 }
 
 fn command_help(name: &str) -> String {
     let wanted = name.trim().to_lowercase();
-    for (command, usage, description) in COMMANDS {
-        if *command == wanted {
-            return format!("{command}\nUsage: {usage}\n{description}");
+    for command in COMMANDS {
+        if command.name == wanted {
+            if !command.supported_on_current_os() {
+                return format!("{} is not supported on this operating system", command.name);
+            }
+            return format!(
+                "{}\nUsage: {}\n{}",
+                command.name, command.usage, command.description
+            );
         }
     }
     format!("unknown command: {name}\n\n{}", all_help())
@@ -166,6 +315,14 @@ mod tests {
         let output = resp.user_output.unwrap_or_default();
         assert!(output.contains("ls [path]"));
         assert!(output.contains("drives"));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(output.contains("bash [command]"));
+            assert!(output.contains("sh [command]"));
+            assert!(!output.contains("cmd [command]"));
+            assert!(!output.contains("powershell [command]"));
+            assert!(!output.contains("execute_assembly [Assembly.exe]"));
+        }
     }
 
     #[test]
@@ -181,6 +338,23 @@ mod tests {
             resp.user_output
                 .unwrap_or_default()
                 .contains("Usage: ls [path]")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_help_rejects_unsupported_command() {
+        let task = TaskMessage {
+            command: "help".into(),
+            parameters: r#"{"command":"cmd"}"#.into(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        assert_eq!(resp.status.as_deref(), Some("completed"));
+        assert!(
+            resp.user_output
+                .unwrap_or_default()
+                .contains("cmd is not supported on this operating system")
         );
     }
 }
