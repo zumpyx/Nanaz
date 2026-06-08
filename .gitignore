@@ -2,3 +2,6 @@ rabbitmq_config.json
 config.json
 mythic-docs/
 up.md
+module_design.md
+__pycache__/
+*.pyc
