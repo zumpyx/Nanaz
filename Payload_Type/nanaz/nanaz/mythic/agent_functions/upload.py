@@ -1,7 +1,14 @@
+import json
+
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
 
-from ._base import FileBrowserArguments, simple_command_attributes
+from ._base import (
+    FileBrowserArguments,
+    _strip_outer_quotes,
+    normalize_browser_path,
+    simple_command_attributes,
+)
 
 
 class UploadArguments(FileBrowserArguments):
@@ -24,6 +31,34 @@ class UploadArguments(FileBrowserArguments):
                 default_value=268435456,
             ),
         ]
+
+    async def parse_dictionary(self, dictionary_arguments):
+        clean_args = {}
+        if dictionary_arguments.get("full_path"):
+            clean_args["path"] = normalize_browser_path(
+                str(dictionary_arguments["full_path"])
+            )
+        elif "path" in dictionary_arguments:
+            clean_args["path"] = normalize_browser_path(str(dictionary_arguments["path"]))
+        if "file" in dictionary_arguments:
+            clean_args["file"] = dictionary_arguments["file"]
+        if "max_bytes" in dictionary_arguments:
+            clean_args["max_bytes"] = dictionary_arguments["max_bytes"]
+        self.load_args_from_dictionary(clean_args)
+        if dictionary_arguments.get("host"):
+            self.add_arg("host", dictionary_arguments["host"])
+
+    async def parse_arguments(self):
+        cl = self.command_line.strip()
+        if not cl:
+            return
+        if cl.startswith("{"):
+            try:
+                await self.parse_dictionary(json.loads(cl))
+                return
+            except json.JSONDecodeError:
+                pass
+        self.set_arg("path", _strip_outer_quotes(cl))
 
 
 class UploadCommand(CommandBase):
