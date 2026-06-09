@@ -24,7 +24,6 @@ COMMON_COMMANDS = [
     "env",
     "execute",
     "exit",
-    "help",
     "kill",
     "ls",
     "tree",
