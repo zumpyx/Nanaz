@@ -179,7 +179,10 @@ class Nanaz(PayloadType):
     # in the operator UI.
     c2_profiles = ["http"]
     note = f"Cross-platform Rust agent. Version: {semver}."
-    supports_dynamic_loading = False
+    # Mythic only honors per-payload command selection when this is true.
+    # nanaz currently compiles handlers into the binary, while Mythic's
+    # payload/callback command mappings decide what the operator can task.
+    supports_dynamic_loading = True
     supports_multiple_c2_instances_in_build = False
     supports_multiple_c2_in_build = False
 
