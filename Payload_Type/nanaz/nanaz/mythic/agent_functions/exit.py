@@ -45,7 +45,7 @@ class ExitCommand(CommandBase):
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=True,
         load_only=False,
-        suggested_command=True,
+        suggested_command=False,
     )
 
     async def create_go_tasking(

@@ -88,7 +88,7 @@ class FileBrowserArguments(TaskArguments):
 def simple_command_attributes(
     supported_os=None,
     builtin: bool = False,
-    suggested_command: bool = True,
+    suggested_command: bool = False,
 ) -> CommandAttributes:
     """Default attributes used by every nanaz command."""
     if supported_os is None:

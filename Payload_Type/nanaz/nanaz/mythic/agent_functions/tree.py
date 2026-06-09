@@ -60,7 +60,7 @@ class TreeCommand(CommandBase):
     attackmapping = ["T1083"]
     supported_ui_features = ["file_browser:tree"]
     browser_script = None
-    attributes = simple_command_attributes()
+    attributes = simple_command_attributes(suggested_command=True)
 
     async def create_go_tasking(
         self, taskData: PTTaskMessageAllData

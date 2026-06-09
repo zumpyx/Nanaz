@@ -120,7 +120,7 @@ class KillCommand(CommandBase):
     # `kill` feature is so external / scripted callers can reference
     # it as a generic kill capability.
     supported_ui_features = ["kill", "process_browser:kill"]
-    attributes = simple_command_attributes()
+    attributes = simple_command_attributes(suggested_command=True)
 
     async def create_go_tasking(
         self, taskData: PTTaskMessageAllData

@@ -108,7 +108,7 @@ class SocksCommand(CommandBase):
         supported_os=[SupportedOS.Windows, SupportedOS.Linux],
         builtin=False,
         load_only=False,
-        suggested_command=True,
+        suggested_command=False,
     )
 
     async def create_go_tasking(

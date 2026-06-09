@@ -38,7 +38,7 @@ class LsCommand(CommandBase):
     browser_script = BrowserScript(
         script_name="ls_new", author="@zumpyx", for_new_ui=True
     )
-    attributes = simple_command_attributes()
+    attributes = simple_command_attributes(suggested_command=True)
 
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
