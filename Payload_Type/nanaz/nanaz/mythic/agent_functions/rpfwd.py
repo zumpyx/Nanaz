@@ -200,6 +200,7 @@ class RpfwdCommand(CommandBase):
             success_text = f"Stopping rpfwd listener on agent port {port}\n"
 
         if not rpc_resp.Success:
+            response.Success = False
             response.TaskStatus = MythicStatus.Error
             response.Stderr = rpc_resp.Error
             response.Completed = True
@@ -211,6 +212,9 @@ class RpfwdCommand(CommandBase):
             )
             return response
 
+        for arg_name in ("port", "remote_ip", "remote_port", "action"):
+            taskData.args.remove_arg(arg_name)
+        taskData.args.set_manual_args(json.dumps({"action": action, "port": port}))
         await SendMythicRPCResponseCreate(
             MythicRPCResponseCreateMessage(
                 TaskID=taskData.Task.ID,

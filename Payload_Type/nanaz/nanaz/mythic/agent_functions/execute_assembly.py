@@ -1,4 +1,5 @@
 import base64
+import json
 
 from mythic_container.MythicCommandBase import *
 from mythic_container.MythicRPC import *
@@ -6,6 +7,7 @@ from mythic_container.MythicRPC import *
 from ._base import (
     error_aware_process_response,
     read_cli_token,
+    validate_timeout,
 )
 
 MAX_ASSEMBLY_BYTES = 16 * 1024 * 1024
@@ -99,6 +101,24 @@ class ExecuteAssemblyArguments(TaskArguments):
                     ),
                 ],
             ),
+            CommandParameter(
+                name="timeout",
+                type=ParameterType.Number,
+                default_value=300,
+                description="Maximum worker runtime in seconds.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=5,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=5,
+                    ),
+                ],
+            ),
         ]
 
     async def get_files(
@@ -184,7 +204,7 @@ class ExecuteAssemblyCommand(CommandBase):
     cmd = "execute_assembly"
     needs_admin = False
     help_cmd = "execute_assembly [Assembly.exe] [args]"
-    description = "Execute a .NET assembly in-process using rustclr."
+    description = "Execute a .NET Framework assembly in an isolated rustclr worker. Explicitly select this command only when CLR execution risk is acceptable."
     version = 1
     author = "@zumpyx"
     argument_class = ExecuteAssemblyArguments
@@ -195,7 +215,7 @@ class ExecuteAssemblyCommand(CommandBase):
         supported_os=[SupportedOS.Windows],
         builtin=False,
         load_only=False,
-        suggested_command=True,
+        suggested_command=False,
     )
 
     async def create_go_tasking(
@@ -242,6 +262,10 @@ class ExecuteAssemblyCommand(CommandBase):
             if not content_resp.Success or content_resp.Content is None:
                 raise Exception(content_resp.Error or "failed to fetch assembly bytes")
             max_bytes = taskData.args.get_arg("max_bytes") or MAX_ASSEMBLY_BYTES
+            timeout = taskData.args.get_arg("timeout") or 300
+            timeout_error = validate_timeout(timeout)
+            if timeout_error:
+                raise Exception(timeout_error)
             if max_bytes < 1 or max_bytes > MAX_ASSEMBLY_BYTES:
                 raise Exception(
                     f"max_bytes must be between 1 and {MAX_ASSEMBLY_BYTES}"
@@ -255,10 +279,20 @@ class ExecuteAssemblyCommand(CommandBase):
                 "assembly_b64",
                 base64.b64encode(content_resp.Content).decode("utf-8"),
             )
-            taskData.args.remove_arg("assembly_name")
+            taskData.args.set_manual_args(
+                json.dumps(
+                    {
+                        "assembly_b64": taskData.args.get_arg("assembly_b64"),
+                        "assembly_arguments": assembly_args,
+                        "patch_exit": taskData.args.get_arg("patch_exit"),
+                        "timeout": timeout,
+                    }
+                )
+            )
             response.DisplayParams = f"-Assembly {assembly_name}"
             if assembly_args:
                 response.DisplayParams += f" -Arguments {assembly_args}"
+            response.DisplayParams += f" -Timeout {timeout}"
         except Exception as e:
             response.Success = False
             response.Error = str(e)

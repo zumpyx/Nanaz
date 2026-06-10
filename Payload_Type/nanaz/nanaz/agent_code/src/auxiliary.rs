@@ -4,6 +4,7 @@ use mythic::{AgentExtras, AlertMessage};
 
 pub struct AuxiliaryManager {
     outbound_alerts: VecDeque<AlertMessage>,
+    warned_delegates: bool,
     warned_edges: bool,
 }
 
@@ -11,14 +12,21 @@ impl AuxiliaryManager {
     pub fn new() -> Self {
         Self {
             outbound_alerts: VecDeque::new(),
+            warned_delegates: false,
             warned_edges: false,
         }
     }
 
     pub fn handle_inbound(&mut self, extras: &AgentExtras) {
+        if !extras.delegates.is_empty() && !self.warned_delegates {
+            self.warned_delegates = true;
+            self.warn(
+                "received delegate messages from Mythic; P2P is not implemented in this payload",
+            );
+        }
         if !extras.edges.is_empty() && !self.warned_edges {
             self.warned_edges = true;
-            self.warn("received edge messages from Mythic; edge handling is not active");
+            self.warn("received edge messages from Mythic; P2P is not implemented in this payload");
         }
     }
 

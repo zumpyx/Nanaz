@@ -10,6 +10,7 @@ use mythic::{C2Transport, MythicAgent, MythicError, MythicResult, TaskResponse};
 use rand::seq::SliceRandom;
 use uuid::Uuid;
 
+use crate::common::cwd;
 use crate::config::Config;
 use crate::dispatch;
 use crate::protocol_pump::ProtocolPump;
@@ -355,7 +356,7 @@ pub fn run(config: Config) -> MythicResult<()> {
                     }
 
                     if task.command == "pty" {
-                        let response = pump.start_interactive(&task);
+                        let response = cwd::with_cwd_lock(|| pump.start_interactive(&task));
                         pump.pending_mut().push(response);
                         continue;
                     }

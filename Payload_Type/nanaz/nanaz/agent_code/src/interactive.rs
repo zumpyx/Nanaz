@@ -1,8 +1,13 @@
 use std::collections::{HashMap, VecDeque};
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::fs::File;
 use std::io::{self, Read, Write};
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::os::fd::FromRawFd;
+#[cfg(not(unix))]
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -28,8 +33,8 @@ const OUTPUT_QUEUE_CAPACITY: usize = 256;
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 struct InteractiveSession {
-    child: Child,
-    stdin: ChildStdin,
+    process: SessionProcess,
+    input: Box<dyn Write + Send>,
     rx: Receiver<InteractiveEvent>,
     last_activity: Instant,
     exit_reason: Option<String>,
@@ -39,6 +44,70 @@ struct InteractiveSession {
 enum InteractiveEvent {
     Output(Vec<u8>),
     Error(Vec<u8>),
+}
+
+enum SessionProcess {
+    #[cfg(unix)]
+    Pty { pid: libc::pid_t },
+    #[cfg(not(unix))]
+    Pipe { child: Child },
+}
+
+impl SessionProcess {
+    fn exit_reason(&mut self) -> io::Result<Option<String>> {
+        match self {
+            #[cfg(unix)]
+            SessionProcess::Pty { pid } => {
+                let mut status = 0;
+                let waited = unsafe { libc::waitpid(*pid, &mut status, libc::WNOHANG) };
+                if waited == 0 {
+                    Ok(None)
+                } else if waited == *pid {
+                    Ok(Some(format!(
+                        "interactive session {}",
+                        unix_status_text(status)
+                    )))
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            }
+            #[cfg(not(unix))]
+            SessionProcess::Pipe { child } => match child.try_wait()? {
+                Some(status) => {
+                    let code = status.code().unwrap_or(-1);
+                    Ok(Some(format!("interactive session exited with code {code}")))
+                }
+                None => Ok(None),
+            },
+        }
+    }
+
+    fn terminate(&mut self) {
+        match self {
+            #[cfg(unix)]
+            SessionProcess::Pty { pid } => unsafe {
+                let _ = libc::kill(*pid, libc::SIGTERM);
+                let mut status = 0;
+                let _ = libc::waitpid(*pid, &mut status, 0);
+            },
+            #[cfg(not(unix))]
+            SessionProcess::Pipe { child } => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn unix_status_text(status: i32) -> String {
+    if libc::WIFEXITED(status) {
+        format!("exited with code {}", libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        format!("terminated by signal {}", libc::WTERMSIG(status))
+    } else {
+        "ended".into()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,7 +234,7 @@ impl InteractiveManager {
             self.queue_error(message.task_id, b"interactive session is not active\n");
             return;
         };
-        if session.stdin.write_all(&bytes).is_err() || session.stdin.flush().is_err() {
+        if session.input.write_all(&bytes).is_err() || session.input.flush().is_err() {
             self.close(message.task_id, true, "interactive stdin write failed");
             return;
         }
@@ -194,12 +263,8 @@ impl InteractiveManager {
                     .flush_if_idle(task_id, &mut self.outbound);
 
                 if session.exit_reason.is_none() {
-                    match session.child.try_wait() {
-                        Ok(Some(status)) => {
-                            let code = status.code().unwrap_or(-1);
-                            session.exit_reason =
-                                Some(format!("interactive session exited with code {code}"));
-                        }
+                    match session.process.exit_reason() {
+                        Ok(Some(reason)) => session.exit_reason = Some(reason),
                         Ok(None) => {}
                         Err(e) => {
                             session.exit_reason =
@@ -227,8 +292,7 @@ impl InteractiveManager {
 
     fn close(&mut self, task_id: Uuid, notify_mythic: bool, reason: &str) {
         if let Some(mut session) = self.sessions.remove(&task_id) {
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            session.process.terminate();
         }
         self.last_activity = Some(Instant::now());
         if notify_mythic {
@@ -338,22 +402,76 @@ fn default_shell() -> &'static str {
 }
 
 fn spawn_session(spec: ShellSpec, max_output_batch_bytes: usize) -> io::Result<InteractiveSession> {
+    #[cfg(unix)]
+    {
+        return spawn_pty_session(spec, max_output_batch_bytes);
+    }
+    #[cfg(not(unix))]
+    {
+        spawn_pipe_session(spec, max_output_batch_bytes)
+    }
+}
+
+#[cfg(unix)]
+fn spawn_pty_session(
+    spec: ShellSpec,
+    max_output_batch_bytes: usize,
+) -> io::Result<InteractiveSession> {
+    let mut master_fd: libc::c_int = -1;
+    let pid = unsafe {
+        libc::forkpty(
+            &mut master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if pid < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if pid == 0 {
+        let bin = CString::new(spec.bin).unwrap_or_else(|_| CString::new("sh").unwrap());
+        let mut args = Vec::with_capacity(spec.args.len() + 1);
+        args.push(bin.clone());
+        for arg in spec.args {
+            match CString::new(*arg) {
+                Ok(arg) => args.push(arg),
+                Err(_) => unsafe { libc::_exit(126) },
+            }
+        }
+        let mut argv = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+        argv.push(std::ptr::null());
+        unsafe {
+            libc::execvp(bin.as_ptr(), argv.as_ptr());
+            libc::_exit(127);
+        }
+    }
+
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    let writer = master.try_clone()?;
+    let (tx, rx) = mpsc::sync_channel(OUTPUT_QUEUE_CAPACITY);
+    spawn_reader(master, tx, false);
+    Ok(InteractiveSession {
+        process: SessionProcess::Pty { pid },
+        input: Box::new(writer),
+        rx,
+        last_activity: Instant::now(),
+        exit_reason: None,
+        output_batch: InteractiveOutputBatch::new(max_output_batch_bytes),
+    })
+}
+
+#[cfg(not(unix))]
+fn spawn_pipe_session(
+    spec: ShellSpec,
+    max_output_batch_bytes: usize,
+) -> io::Result<InteractiveSession> {
     let mut command = Command::new(spec.bin);
     command
         .args(spec.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
-    }
 
     let mut child = command.spawn()?;
     let stdin = child
@@ -372,8 +490,8 @@ fn spawn_session(spec: ShellSpec, max_output_batch_bytes: usize) -> io::Result<I
     spawn_reader(stdout, tx.clone(), false);
     spawn_reader(stderr, tx, true);
     Ok(InteractiveSession {
-        child,
-        stdin,
+        process: SessionProcess::Pipe { child },
+        input: Box::new(stdin),
         rx,
         last_activity: Instant::now(),
         exit_reason: None,

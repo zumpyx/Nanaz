@@ -245,6 +245,59 @@ fn split_hostport(s: &str) -> Option<(String, u16)> {
 
 // ── Windows: netstat -ano ───────────────────────────────────
 
+#[cfg(any(windows, test))]
+fn parse_windows_netstat(stdout: &str) -> Vec<NetEntry> {
+    let mut entries = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 {
+            continue;
+        }
+
+        let proto_token = parts[0];
+        if !proto_token.eq_ignore_ascii_case("tcp") && !proto_token.eq_ignore_ascii_case("udp") {
+            continue;
+        }
+        let proto = proto_token.to_lowercase();
+        let (state, pid) = if proto == "udp" {
+            (
+                "NONE".to_string(),
+                parts.last().and_then(|s| s.parse().ok()),
+            )
+        } else {
+            let s = if parts.len() >= 5 {
+                parts[3].to_string()
+            } else {
+                "UNKNOWN".to_string()
+            };
+            let p = parts.last().and_then(|s| s.parse().ok());
+            (s, p)
+        };
+
+        if let (Some((local_addr, local_port)), Some((remote_addr, remote_port))) = (
+            split_windows_endpoint(parts[1]),
+            split_windows_endpoint(parts[2]),
+        ) {
+            entries.push(NetEntry {
+                protocol: proto,
+                local_addr,
+                local_port,
+                remote_addr,
+                remote_port,
+                state,
+                pid,
+            });
+        }
+    }
+    entries
+}
+
 #[cfg(windows)]
 fn list_connections() -> Result<Vec<NetEntry>, String> {
     let output = std::process::Command::new("netstat")
@@ -253,66 +306,27 @@ fn list_connections() -> Result<Vec<NetEntry>, String> {
         .map_err(|e| format!("netstat failed: {e}"))?;
 
     let stdout = decode_output(&output.stdout);
-    let mut entries = Vec::new();
-    let mut in_tcp = false;
+    Ok(parse_windows_netstat(&stdout))
+}
 
-    for line in stdout.lines() {
-        let line = line.trim();
-
-        if line.starts_with("Active") {
-            in_tcp = line.contains("TCP") || line.contains("UDP");
-            continue;
-        }
-        if line.starts_with("Proto") {
-            continue;
-        }
-
-        if in_tcp && !line.is_empty() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let proto = parts[0].to_lowercase();
-                // Windows `netstat -ano` row format:
-                //   TCP  0.0.0.0:80   0.0.0.0:0   LISTENING   1234   <- 5 columns
-                //   UDP  0.0.0.0:123  *:*                    5678   <- 4 columns (no state)
-                // The state column is the 4th token, present only for TCP.
-                // Earlier we conflated it with local-address and labelled UDP
-                // rows as "ESTABLISHED" — which is wrong (UDP is stateless).
-                let (state, pid) = if proto.starts_with("udp") {
-                    // No state column. The PID is the last token, which is
-                    // parts[3] when there are exactly 4 columns.
-                    (
-                        "NONE".to_string(),
-                        parts.last().and_then(|s| s.parse().ok()),
-                    )
-                } else {
-                    let s = if parts.len() >= 5
-                        && parts[3].chars().all(|c| c.is_alphabetic() || c == '_')
-                    {
-                        parts[3].to_string()
-                    } else {
-                        "UNKNOWN".to_string()
-                    };
-                    let p = parts.last().and_then(|s| s.parse().ok());
-                    (s, p)
-                };
-                let local_parts: Vec<&str> = parts[1].rsplitn(2, ':').collect();
-                let remote_parts: Vec<&str> = parts[2].rsplitn(2, ':').collect();
-
-                if local_parts.len() >= 2 && remote_parts.len() >= 2 {
-                    entries.push(NetEntry {
-                        protocol: proto,
-                        local_addr: local_parts[1].trim_start_matches('[').to_string(),
-                        local_port: local_parts[0].trim_end_matches(']').parse().unwrap_or(0),
-                        remote_addr: remote_parts[1].trim_start_matches('[').to_string(),
-                        remote_port: remote_parts[0].trim_end_matches(']').parse().unwrap_or(0),
-                        state,
-                        pid,
-                    });
-                }
-            }
-        }
+#[cfg(any(windows, test))]
+fn split_windows_endpoint(endpoint: &str) -> Option<(String, u16)> {
+    if endpoint == "*:*" || endpoint == "*" {
+        return Some(("0.0.0.0".to_string(), 0));
     }
-    Ok(entries)
+    if let Some(rest) = endpoint.strip_prefix('[') {
+        let end = rest.rfind("]:")?;
+        let host = rest[..end].to_string();
+        let port = rest[end + 2..].parse().ok()?;
+        return Some((host, port));
+    }
+    let colon = endpoint.rfind(':')?;
+    let host = endpoint[..colon]
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let port = endpoint[colon + 1..].trim_end_matches(']').parse().ok()?;
+    Some((host, port))
 }
 
 // ── Fallback ────────────────────────────────────────────────
@@ -351,5 +365,37 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
             }
         }
         Err(e) => TaskResponse::failed(task.id, &e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_netstat_parser_ignores_localized_headers() {
+        let sample = r#"
+活动连接
+
+  协议  本地地址          外部地址        状态           PID
+  TCP    0.0.0.0:135      0.0.0.0:0      LISTENING      888
+  TCP    [::1]:49670      [::]:0         LISTENING      4
+  UDP    0.0.0.0:500      *:*                           704
+"#;
+
+        let entries = parse_windows_netstat(sample);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].protocol, "tcp");
+        assert_eq!(entries[0].local_addr, "0.0.0.0");
+        assert_eq!(entries[0].local_port, 135);
+        assert_eq!(entries[0].state, "LISTENING");
+        assert_eq!(entries[0].pid, Some(888));
+        assert_eq!(entries[1].local_addr, "::1");
+        assert_eq!(entries[1].local_port, 49670);
+        assert_eq!(entries[2].protocol, "udp");
+        assert_eq!(entries[2].remote_addr, "0.0.0.0");
+        assert_eq!(entries[2].remote_port, 0);
+        assert_eq!(entries[2].state, "NONE");
+        assert_eq!(entries[2].pid, Some(704));
     }
 }

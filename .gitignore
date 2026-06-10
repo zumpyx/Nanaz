@@ -5,3 +5,4 @@ up.md
 module_design.md
 __pycache__/
 *.pyc
+.codex/local-notes.md

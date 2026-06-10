@@ -342,11 +342,12 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
             success: Some(true),
             ..Default::default()
         };
+        let user_output = serde_json::to_string(&entry).unwrap_or(output);
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(output),
+            user_output: Some(user_output),
             file_browser: Some(entry),
             ..Default::default()
         }
@@ -375,26 +376,28 @@ fn handle_with_mode(task: &TaskMessage, recursive: bool) -> TaskResponse {
             &node_name,
             &files,
         );
+        let entry = FileBrowserEntry {
+            is_file: false,
+            name: node_name,
+            host,
+            parent_path,
+            success: Some(true),
+            // Do not default update_deleted=true here. Mythic's
+            // server-side file-browser cleanup searches by
+            // operation/host/path and updates existing rows without
+            // limiting to the current callback. On hosts with old
+            // callbacks, that causes a fresh ls to mutate stale
+            // callback trees and pollute the File Browser UI.
+            files,
+            ..Default::default()
+        };
+        let user_output = serde_json::to_string(&entry).unwrap_or(output);
         TaskResponse {
             task_id: task.id,
             completed: Some(true),
             status: Some("completed".into()),
-            user_output: Some(output),
-            file_browser: Some(FileBrowserEntry {
-                is_file: false,
-                name: node_name,
-                host,
-                parent_path,
-                success: Some(true),
-                // Do not default update_deleted=true here. Mythic's
-                // server-side file-browser cleanup searches by
-                // operation/host/path and updates existing rows without
-                // limiting to the current callback. On hosts with old
-                // callbacks, that causes a fresh ls to mutate stale
-                // callback trees and pollute the File Browser UI.
-                files,
-                ..Default::default()
-            }),
+            user_output: Some(user_output),
+            file_browser: Some(entry),
             ..Default::default()
         }
     }

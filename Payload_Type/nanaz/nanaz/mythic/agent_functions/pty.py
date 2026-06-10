@@ -19,7 +19,7 @@ class PtyArguments(TaskArguments):
                 cli_name="Shell",
                 display_name="Shell",
                 type=ParameterType.ChooseOne,
-                choices=["default", "sh", "bash", "cmd", "powershell"],
+                choices=["default", "sh", "bash"],
                 default_value="default",
                 description="Interactive shell to start.",
                 parameter_group_info=[ParameterGroupInfo(required=False, ui_position=0)],
@@ -75,8 +75,8 @@ class PtyArguments(TaskArguments):
 
     def _validate_args(self):
         shell = (self.get_arg("shell") or "default").lower()
-        if shell not in ("default", "sh", "bash", "cmd", "powershell"):
-            raise Exception("pty shell must be one of: default, sh, bash, cmd, powershell.")
+        if shell not in ("default", "sh", "bash"):
+            raise Exception("pty shell must be one of: default, sh, bash.")
         self.set_arg("shell", shell)
 
         chunk_size = self.get_arg("output_chunk_bytes")
@@ -93,8 +93,8 @@ class PtyArguments(TaskArguments):
 class PtyCommand(CommandBase):
     cmd = "pty"
     needs_admin = False
-    help_cmd = "pty [sh|bash|cmd|powershell] [output_chunk_bytes]"
-    description = "Start an interactive shell task."
+    help_cmd = "pty [sh|bash] [output_chunk_bytes]"
+    description = "Start an interactive shell task backed by a Unix pseudo-terminal."
     version = 1
     author = "@zumpyx"
     argument_class = PtyArguments
@@ -102,10 +102,10 @@ class PtyCommand(CommandBase):
     supported_ui_features = ["task_response:interactive", "shell", "execute:shell"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
-        supported_os=[SupportedOS.Windows, SupportedOS.Linux],
+        supported_os=[SupportedOS.Linux],
         builtin=False,
         load_only=False,
-        suggested_command=True,
+        suggested_command=False,
     )
 
     async def create_go_tasking(

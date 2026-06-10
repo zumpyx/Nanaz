@@ -70,7 +70,7 @@ On Linux release, the agent:
 1. Forks and exits the parent.
 2. `setsid` to detach from the controlling terminal.
 3. Closes fds 0/1/2 and reopens them against `/dev/null`.
-4. `chdir /` so the launcher's cwd is not held busy.
+4. Preserves the launch cwd so callback-relative tasking stays stable.
 5. Ignores `SIGHUP`.
 
 The Mythic container picks up the built binary; operators see the file
@@ -127,22 +127,22 @@ This agent speaks Mythic's `http` C2 profile. The container's
 | `cat` | `path` | Read file. Cross-platform encoding detection (UTF-8 → Windows ANSI code page fallback). |
 | `cd` / `pwd` | `path` / — | Change or print the agent process cwd; mirrors cwd into Mythic callback state. |
 | `cp` | `src dst` | Cross-platform. Auto-creates dst parent. |
-| `download` | `path` | Multi-chunk, streaming. Default 512 KiB chunks (configurable via `chunk_size`). No upper bound on file size. |
+| `download` | `path` | Multi-chunk, streaming. Default 512 KiB chunks (configurable via `chunk_size`). Refuses files larger than 4 GiB. |
 | `env` | `[key]` | List env vars, optionally filtered by substring. |
-| `execute_assembly` / `executeAssembly` | `Assembly.exe [args]` | Windows-only. Execute a .NET assembly in-process via `rustclr`; supports uploaded or registered assemblies. |
+| `execute_assembly` / `executeAssembly` | `Assembly.exe [args] [timeout]` | Windows-only. Execute a .NET assembly in an isolated worker via `rustclr`; supports uploaded or registered assemblies. |
 | `exit` | `process` / `thread` | Stop the beacon. `process` flushes pending then exits; `thread` is a legacy alias. |
 | `ls` | `[path] [-r]` | File browser. `~` expansion, recursive mode, dirs first sort. |
 | `mkdir` | `path` | `mkdir -p` semantics. |
 | `mv` | `src dst` | Renames; falls back to copy+delete on `EXDEV` (cross-filesystem). |
 | `netstat` | — | TCP/UDP connection table. Linux: `/proc/net/tcp{,6}` + `udp{,6}`. macOS: `netstat -an -W -p tcp,udp`. Windows: `netstat -ano`. |
 | `ps` | — | Process listing. Linux: `/proc` walk. macOS: `ps`. Windows: `wmic` (with `tasklist` fallback). |
-| `powerpick` / `PowerPick` | `command` | Windows-only. Execute PowerShell in-process via `rustclr` without spawning `powershell.exe`. |
+| `powerpick` / `PowerPick` | `command [timeout]` | Windows-only. Execute PowerShell in an isolated worker via `rustclr` without spawning `powershell.exe`. |
 | `resolve` | `hostname` | DNS resolve. `std::net::ToSocketAddrs`. |
-| `rm` | `path [-r]` | File browser. `recursive=true` for directories; `recursive` requires `confirm_destructive=true` to prevent typos. System paths require `allow_system_path=true`. |
+| `rm` | `path [-r]` | File browser. `recursive=true` for directories; `recursive` requires `confirm_destructive=true` to prevent typos. |
 | `shell` | `command [shell] [timeout]` | Run via `cmd` / `powershell` / `bash` / `sh`. Default timeout 60s. |
 | `sleep` | `interval [jitter]` | Change polling cadence at runtime. |
 | `sysinfo` | — | OS, kernel, CPU, memory, uptime. |
-| `upload` | `path` + file | Base64 in `file_bytes`. Max 256 MiB. Refuses system paths unless `allow_system_path=true`. |
+| `upload` | `path` + file | Base64 in `file_bytes`, or Mythic file chunk pull via `file_id`. Max 256 MiB. |
 | `wget` | `url [path]` | HTTPS GET, write to disk. |
 | `whoami` | — | `user`, `uid`/`gid` (Unix), `home`, `hostname`. |
 
@@ -217,16 +217,15 @@ breaking changes hit.
 
 - **AES PSK** is generated per-payload by Mythic and embedded at build
   time. Treat `agent_code/config.json` as a secret — it is gitignored.
-- **TLS** defaults to `insecure_skip_tls_verify=true` for compatibility
-  with self-signed C2 certificates. In a monitored network, set it to
-  `false` and supply a root store.
-- **Upload** refuses system paths (`/etc`, `C:\Windows`, …) unless the
-  task sets `allow_system_path=true`. Max 256 MiB per upload.
-- **Download** has no upper size limit, but reads in chunks so memory
-  is bounded.
-- The agent does **not** enable `encrypted_exchange_check` (the
-  Noise_KK EKE handshake) by default; configure it through the C2
-  profile if you need forward secrecy.
+- **TLS** uses the HTTP client's normal certificate validation. Use a
+  trusted certificate for HTTPS C2, or use HTTP in isolated test labs.
+- **Upload** writes through a temporary file and atomically replaces the
+  destination when possible. Max 256 MiB per upload.
+- **Download** reads in chunks so memory is bounded, and refuses files
+  larger than 4 GiB.
+- The agent does **not** support `encrypted_exchange_check` (the
+  Noise_KK EKE handshake). Payload builds and runtime configs that enable
+  it fail closed instead of silently downgrading.
 
 ---
 

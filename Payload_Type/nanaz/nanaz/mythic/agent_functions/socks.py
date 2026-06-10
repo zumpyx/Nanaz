@@ -99,7 +99,6 @@ class SocksCommand(CommandBase):
     help_cmd = "socks -Port 7000 -Action start"
     description = "Start or stop a Mythic SOCKS5 listener routed through nanaz."
     version = 1
-    script_only = True
     author = "@zumpyx"
     argument_class = SocksArguments
     attackmapping = ["T1090"]
@@ -151,6 +150,7 @@ class SocksCommand(CommandBase):
             success_text = f"Stopped SOCKS5 server on port {port}\n"
 
         if not rpc_resp.Success:
+            response.Success = False
             response.TaskStatus = MythicStatus.Error
             response.Stderr = rpc_resp.Error
             response.Completed = True
@@ -164,6 +164,18 @@ class SocksCommand(CommandBase):
 
         response.TaskStatus = MythicStatus.Success
         response.Completed = True
+        for arg_name in ("port", "action", "username", "password"):
+            taskData.args.remove_arg(arg_name)
+        taskData.args.set_manual_args(
+            json.dumps(
+                {
+                    "port": port,
+                    "action": action,
+                    "username": username,
+                    "password": password,
+                }
+            )
+        )
         await SendMythicRPCResponseCreate(
             MythicRPCResponseCreateMessage(
                 TaskID=taskData.Task.ID,

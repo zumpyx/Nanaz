@@ -24,6 +24,7 @@ struct RpfwdConnection {
     port: u32,
     pending_writes: VecDeque<Vec<u8>>,
     last_activity: Instant,
+    local_eof: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,9 +197,9 @@ impl RpfwdManager {
                                     port: port as u32,
                                     pending_writes: VecDeque::new(),
                                     last_activity: Instant::now(),
+                                    local_eof: false,
                                 },
                             );
-                            self.queue_data(server_id, Some(port as u32), &[], false);
                             self.last_activity = Some(Instant::now());
                         }
                     }
@@ -229,12 +230,16 @@ impl RpfwdManager {
             loop {
                 let mut buf = [0u8; MAX_READ_PER_CONN];
                 let read_result = match self.connections.get_mut(&id) {
+                    Some(connection) if connection.local_eof => break,
                     Some(connection) => connection.stream.read(&mut buf),
                     None => break,
                 };
                 match read_result {
                     Ok(0) => {
-                        close = true;
+                        if let Some(connection) = self.connections.get_mut(&id) {
+                            connection.local_eof = true;
+                            connection.last_activity = Instant::now();
+                        }
                         break;
                     }
                     Ok(n) => {
@@ -355,6 +360,7 @@ fn flush_pending_writes(connection: &mut RpfwdConnection) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Shutdown;
     use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
@@ -400,20 +406,15 @@ mod tests {
         let mut server_id = None;
         for _ in 0..20 {
             let outbound = manager.drain_outbound();
-            if let Some(msg) = outbound
-                .iter()
-                .find(|msg| msg.data.as_deref() == Some("") || msg.data.is_some())
-            {
+            if let Some(msg) = outbound.iter().find(|msg| {
+                msg.data
+                    .as_ref()
+                    .and_then(|data| STANDARD.decode(data).ok())
+                    .as_deref()
+                    == Some(b"hello")
+            }) {
                 server_id = Some(msg.server_id);
-                if outbound.iter().any(|msg| {
-                    msg.data
-                        .as_ref()
-                        .and_then(|data| STANDARD.decode(data).ok())
-                        .as_deref()
-                        == Some(b"hello")
-                }) {
-                    break;
-                }
+                break;
             }
             thread::sleep(Duration::from_millis(25));
         }
@@ -425,6 +426,70 @@ mod tests {
             data: Some(STANDARD.encode(b"world")),
             port: Some(port as u32),
         }]);
+        for _ in 0..20 {
+            manager.drain_outbound();
+            if client.is_finished() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn local_eof_does_not_close_before_remote_response() {
+        let reserved = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = reserved.local_addr().unwrap().port();
+        drop(reserved);
+
+        let mut manager = RpfwdManager::new();
+        let task = TaskMessage {
+            id: Uuid::new_v4(),
+            command: "rpfwd".into(),
+            parameters: format!(r#"{{"port":{port}}}"#),
+            ..Default::default()
+        };
+        let response = manager.start_from_task(&task);
+        assert_eq!(response.status.as_deref(), Some("completed"));
+
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+            stream.shutdown(Shutdown::Write).unwrap();
+            let mut out = Vec::new();
+            stream.read_to_end(&mut out).unwrap();
+            assert_eq!(out, b"HTTP/1.0 200 OK\r\n\r\nok");
+        });
+
+        let mut server_id = None;
+        for _ in 0..20 {
+            let outbound = manager.drain_outbound();
+            if let Some(msg) = outbound.iter().find(|msg| {
+                msg.data
+                    .as_ref()
+                    .and_then(|data| STANDARD.decode(data).ok())
+                    .is_some_and(|data| data.starts_with(b"GET /"))
+            }) {
+                server_id = Some(msg.server_id);
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let server_id = server_id.expect("rpfwd should forward request before local EOF");
+
+        manager.handle_inbound(vec![ReversePortForwardMessage {
+            server_id,
+            exit: false,
+            data: Some(STANDARD.encode(b"HTTP/1.0 200 OK\r\n\r\nok")),
+            port: Some(port as u32),
+        }]);
+        manager.handle_inbound(vec![ReversePortForwardMessage {
+            server_id,
+            exit: true,
+            data: Some(String::new()),
+            port: Some(port as u32),
+        }]);
+
         for _ in 0..20 {
             manager.drain_outbound();
             if client.is_finished() {

@@ -31,7 +31,6 @@ COMMON_COMMANDS = [
     "mv",
     "netstat",
     "ps",
-    "pty",
     "pwd",
     "resolve",
     "rm",
@@ -41,6 +40,28 @@ COMMON_COMMANDS = [
     "sysinfo",
     "upload",
     "wget",
+    "whoami",
+]
+
+DEFAULT_COMMANDS = [
+    "cat",
+    "cd",
+    "download",
+    "drives",
+    "env",
+    "exit",
+    "kill",
+    "ls",
+    "mkdir",
+    "mv",
+    "netstat",
+    "ps",
+    "pwd",
+    "resolve",
+    "rm",
+    "sleep",
+    "sysinfo",
+    "upload",
     "whoami",
 ]
 
@@ -55,6 +76,7 @@ OS_COMMANDS = {
     "Linux": COMMON_COMMANDS
     + [
         "bash",
+        "pty",
         "sh",
     ],
 }
@@ -154,7 +176,7 @@ def _commands_for_os(target_os: str, requested) -> tuple[list[str], list[str]]:
     allowed = OS_COMMANDS[target_os]
     requested = list(requested or [])
     if not requested:
-        return list(allowed), []
+        return [command for command in DEFAULT_COMMANDS if command in allowed], []
 
     requested_set = set(requested)
     selected = [command for command in allowed if command in requested_set]
@@ -179,9 +201,9 @@ class Nanaz(PayloadType):
     # in the operator UI.
     c2_profiles = ["http"]
     note = f"Cross-platform Rust agent. Version: {semver}."
-    # Mythic only honors per-payload command selection when this is true.
-    # nanaz currently compiles handlers into the binary, while Mythic's
-    # payload/callback command mappings decide what the operator can task.
+    # Mythic only honors per-payload command selection when this is true. nanaz
+    # still compiles handlers statically; this flag is for build-time command
+    # selection and callback command mappings, not runtime load/unload support.
     supports_dynamic_loading = True
     supports_multiple_c2_instances_in_build = False
     supports_multiple_c2_in_build = False

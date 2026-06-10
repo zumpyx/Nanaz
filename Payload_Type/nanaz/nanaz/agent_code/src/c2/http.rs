@@ -126,7 +126,6 @@ impl C2Transport for HttpProfile {
         Ok(iv)
     }
 
-    // TODO(2026-07): implement Noise_KK EKE handshake (scripts/init.rs has the test code)
     fn encrypted_exchange_check(&self) -> bool {
         self.encrypted_exchange_check
     }

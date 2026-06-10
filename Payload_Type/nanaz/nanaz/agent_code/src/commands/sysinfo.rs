@@ -180,7 +180,7 @@ fn gather_sysinfo() -> Result<Value, String> {
 fn gather_sysinfo() -> Result<Value, String> {
     use crate::sys::encoding::decode_output;
     use windows_sys::Win32::System::SystemInformation::{
-        GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+        GetSystemInfo, GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
     };
 
     let hostname = std::process::Command::new("hostname")
@@ -192,26 +192,21 @@ fn gather_sysinfo() -> Result<Value, String> {
 
     let arch = std::env::consts::ARCH.to_string();
 
-    let (os_name, cpu_cores) = {
+    let os_name = {
         let out = std::process::Command::new("systeminfo")
             .output()
             .map(|o| decode_output(&o.stdout))
             .unwrap_or_default();
 
-        let os = out
-            .lines()
+        out.lines()
             .find(|l| l.contains("OS Name"))
             .map(|l| l.split(':').nth(1).unwrap_or("").trim().to_string())
-            .unwrap_or_else(|| "Windows".into());
-
-        let cores = out
-            .lines()
-            .find(|l| l.contains("Processor(s)"))
-            .and_then(|l| l.split(':').nth(1))
-            .and_then(|s| s.trim().split_whitespace().next()?.parse().ok())
-            .unwrap_or(0u64);
-
-        (os, cores)
+            .unwrap_or_else(|| "Windows".into())
+    };
+    let cpu_cores = unsafe {
+        let mut info: SYSTEM_INFO = std::mem::zeroed();
+        GetSystemInfo(&mut info);
+        u64::from(info.dwNumberOfProcessors)
     };
 
     let cpu_model = std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default();

@@ -1,6 +1,6 @@
 from mythic_container.MythicCommandBase import *
 
-from ._base import error_aware_process_response
+from ._base import error_aware_process_response, validate_timeout
 
 
 class PowerPickArguments(TaskArguments):
@@ -12,7 +12,7 @@ class PowerPickArguments(TaskArguments):
                 cli_name="Command",
                 display_name="Command",
                 type=ParameterType.String,
-                description="PowerShell command to execute in-process.",
+                description="PowerShell command to execute in an isolated rustclr worker.",
                 parameter_group_info=[
                     ParameterGroupInfo(
                         required=True,
@@ -20,7 +20,22 @@ class PowerPickArguments(TaskArguments):
                         ui_position=1,
                     )
                 ],
-            )
+            ),
+            CommandParameter(
+                name="timeout",
+                cli_name="Timeout",
+                display_name="Timeout",
+                type=ParameterType.Number,
+                default_value=300,
+                description="Maximum worker runtime in seconds.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=2,
+                    )
+                ],
+            ),
         ]
 
     async def parse_dictionary(self, dictionary_arguments):
@@ -36,7 +51,7 @@ class PowerPickCommand(CommandBase):
     cmd = "powerpick"
     needs_admin = False
     help_cmd = "powerpick [command]"
-    description = "Execute PowerShell in-process through rustclr."
+    description = "Execute PowerShell in an isolated rustclr worker. Explicitly select this command only when CLR execution risk is acceptable."
     version = 1
     author = "@zumpyx"
     argument_class = PowerPickArguments
@@ -47,17 +62,25 @@ class PowerPickCommand(CommandBase):
         supported_os=[SupportedOS.Windows],
         builtin=False,
         load_only=False,
-        suggested_command=True,
+        suggested_command=False,
     )
 
     async def create_go_tasking(
         self, taskData: PTTaskMessageAllData
     ) -> PTTaskCreateTaskingMessageResponse:
         command = taskData.args.get_arg("command")
+        timeout = taskData.args.get_arg("timeout") or 300
+        timeout_error = validate_timeout(timeout)
+        if timeout_error:
+            return PTTaskCreateTaskingMessageResponse(
+                TaskID=taskData.Task.ID,
+                Success=False,
+                Error=timeout_error,
+            )
         return PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,
             Success=True,
-            DisplayParams=command,
+            DisplayParams=f"-Timeout {timeout} {command}",
         )
 
     async def process_response(

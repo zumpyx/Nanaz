@@ -12,9 +12,8 @@ class DownloadArguments(FileBrowserArguments):
         # `host` is intentionally not a CommandParameter — Mythic's UI
         # injects it via the {host, full_path} dict that flows through
         # FileBrowserArguments.parse_dictionary, and the CLI never has
-        # to type it. The Rust Params still accepts it for P2P host
-        # tagging, but the operator never sees the field in the
-        # tasking panel.
+        # to type it. The Rust handler accepts the hidden field only so
+        # Mythic can tag downloads with the originating callback host.
         self.args = [
             CommandParameter(name="path", type=ParameterType.String, default_value=""),
             CommandParameter(

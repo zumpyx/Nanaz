@@ -101,6 +101,7 @@ pub fn command_uses_process_cwd(command: &str) -> bool {
             | "powershell"
             | "sh"
             | "bash"
+            | "pty"
             | "powerpick"
     )
 }
@@ -165,6 +166,7 @@ mod tests {
             "pwd",
             "upload",
             "bash",
+            "pty",
             "powerpick",
         ] {
             assert!(
