@@ -27,7 +27,7 @@ pub struct HttpProfile {
     pub proxy_port: String,
     pub proxy_user: String,
     pub query_path_name: String,
-    /// When true, query icanhazip.com (over HTTPS) at check-in to populate
+    /// When true, query api.ipify.org (over HTTPS) at check-in to populate
     /// the callback's external_ip field. Off by default — the egress is a
     /// strong blue-team indicator.
     #[serde(default)]

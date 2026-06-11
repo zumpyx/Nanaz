@@ -4,7 +4,7 @@
 //! need to know which HTTP client is compiled in.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use crate::{Error, Result};
 
@@ -80,8 +80,8 @@ pub fn http_get_to_writer<W: Write>(
     max_bytes: u64,
     writer: &mut W,
 ) -> Result<u64> {
-    let mut response = apply_common_options(minreq::get(url), headers, proxy)?
-        .send_lazy()
+    let response = apply_common_options(minreq::get(url), headers, proxy)?
+        .send()
         .map_err(|e| map_minreq_error("GET failed", e))?;
     ensure_success("GET", url, response.status_code, &response.reason_phrase)?;
 
@@ -94,24 +94,19 @@ pub fn http_get_to_writer<W: Write>(
         )));
     }
 
-    let mut buf = [0u8; 16 * 1024];
-    let mut total: u64 = 0;
-    loop {
-        let n = response
-            .read(&mut buf)
-            .map_err(|e| Error::Transport(format!("read body failed: {e}")))?;
-        if n == 0 {
-            break;
-        }
-        total += n as u64;
-        if total > max_bytes {
-            return Err(Error::Transport(format!(
-                "body exceeds cap {max_bytes} (read at least {total} bytes)"
-            )));
-        }
-        writer
-            .write_all(&buf[..n])
-            .map_err(|e| Error::Transport(format!("write failed: {e}")))?;
+    // `send_lazy().read()` intermittently returns raw OS errno 28 after a
+    // valid 200 response in static Linux builds. Use minreq's eager body path
+    // here; the command-level cap still rejects oversized responses before
+    // writing them to disk.
+    let body = response.as_bytes();
+    let total = body.len() as u64;
+    if total > max_bytes {
+        return Err(Error::Transport(format!(
+            "body exceeds cap {max_bytes} (read {total} bytes)"
+        )));
     }
+    writer
+        .write_all(body)
+        .map_err(|e| Error::Transport(format!("write failed: {e}")))?;
     Ok(total)
 }

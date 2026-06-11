@@ -100,7 +100,6 @@ This agent speaks Mythic's `http` C2 profile. The container's
         "query_path_name": "q",
         "headers": { "User-Agent": "..." },
         "killdate": "2099-12-31",
-        "insecure_skip_tls_verify": true,
         "external_ip_check": false
       }
     }
@@ -112,7 +111,6 @@ This agent speaks Mythic's `http` C2 profile. The container's
 
 | Field | Default | Effect |
 |---|---|---|
-| `insecure_skip_tls_verify` | `true` | Skip TLS cert verification (C2 self-signed). Set `false` in monitored networks — will fail closed until you add a root store. |
 | `external_ip_check` | `false` | When `true`, the agent queries `https://api.ipify.org` at check-in. Off by default — the egress is a strong blue-team indicator. |
 | `callback_interval` | required | Seconds between polls. `0` is allowed (busy-loop, useful for testing). |
 | `callback_jitter` | `0` | Percent of `interval` added as random extra sleep. |

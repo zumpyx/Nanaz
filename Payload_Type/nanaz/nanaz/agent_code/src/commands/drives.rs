@@ -14,7 +14,10 @@ use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct Params {}
+struct Params {
+    #[serde(default)]
+    host: Option<String>,
+}
 
 fn parse_params(task: &TaskMessage) -> Result<Params, String> {
     let parameters = task.parameters.trim();
@@ -54,14 +57,22 @@ fn list_drives() -> Result<Vec<String>, String> {
 }
 
 pub fn handle(task: &TaskMessage) -> TaskResponse {
-    if let Err(e) = parse_params(task) {
-        return TaskResponse::failed(task.id, &e);
-    }
+    let params = match parse_params(task) {
+        Ok(params) => params,
+        Err(e) => return TaskResponse::failed(task.id, &e),
+    };
 
     let drives = match list_drives() {
         Ok(drives) => drives,
         Err(e) => return TaskResponse::failed(task.id, &e),
     };
+    let host = params
+        .host
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(|h| h.to_uppercase())
+        .or_else(|| metadata::hostname().map(|h| h.to_uppercase()));
     TaskResponse {
         task_id: task.id,
         completed: Some(true),
@@ -74,7 +85,7 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
         file_browser: Some(FileBrowserEntry {
             is_file: false,
             name: "".into(),
-            host: metadata::hostname().map(|h| h.to_uppercase()),
+            host,
             success: Some(true),
             files: drives
                 .into_iter()
@@ -121,5 +132,33 @@ mod tests {
         };
         let resp = handle(&task);
         assert_eq!(resp.status.as_deref(), Some("error"));
+    }
+
+    #[test]
+    fn test_drives_uses_callback_host_when_provided() {
+        let task = TaskMessage {
+            command: "drives".into(),
+            parameters: r#"{"host":"agent-one.example"}"#.into(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        let fb = resp.file_browser.expect("file_browser set");
+        assert_eq!(fb.host.as_deref(), Some("AGENT-ONE.EXAMPLE"));
+    }
+
+    #[test]
+    fn test_drives_ignores_empty_host() {
+        let task = TaskMessage {
+            command: "drives".into(),
+            parameters: r#"{"host":"   "}"#.into(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        let fb = resp.file_browser.expect("file_browser set");
+        assert!(
+            fb.host
+                .as_deref()
+                .is_none_or(|host| !host.trim().is_empty())
+        );
     }
 }

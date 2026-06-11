@@ -11,6 +11,8 @@ use mythic::{Artifact, TaskMessage, TaskResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
+#[cfg(windows)]
+use crate::common::pathguard::display_path;
 use crate::common::pathguard::normalize_user_path;
 use crate::sys::encoding::decode_output;
 
@@ -179,6 +181,10 @@ fn run_child(
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    if let Ok(cwd) = std::env::current_dir() {
+        command.current_dir(display_path(&cwd));
+    }
     #[cfg(unix)]
     unsafe {
         command.pre_exec(|| {

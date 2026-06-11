@@ -140,6 +140,15 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
     };
     if handle.is_null() {
         let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(87) {
+            return TaskResponse {
+                task_id: task.id,
+                completed: Some(true),
+                status: Some("completed".into()),
+                user_output: Some(format!("pid {} already exited", params.pid)),
+                ..Default::default()
+            };
+        }
         return TaskResponse::failed(
             task.id,
             &format!("OpenProcess({}) failed: {}", params.pid, err),

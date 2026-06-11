@@ -99,7 +99,7 @@ class PtyCommand(CommandBase):
     author = "@zumpyx"
     argument_class = PtyArguments
     attackmapping = ["T1059"]
-    supported_ui_features = ["task_response:interactive", "shell", "execute:shell"]
+    supported_ui_features = ["task_response:interactive"]
     attributes = CommandAttributes(
         spawn_and_injectable=False,
         supported_os=[SupportedOS.Linux],

@@ -43,6 +43,8 @@ class LsCommand(CommandBase):
     async def create_go_tasking(self, taskData: PTTaskMessageAllData) -> PTTaskCreateTaskingMessageResponse:
         response = PTTaskCreateTaskingMessageResponse(TaskID=taskData.Task.ID, Success=True)
         path = taskData.args.get_arg("path") or "."
+        if not taskData.args.get_arg("host"):
+            taskData.args.add_arg("host", taskData.Callback.Host)
         response.DisplayParams = path
 
         return response

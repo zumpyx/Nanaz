@@ -28,6 +28,8 @@ class DrivesCommand(CommandBase):
     async def create_go_tasking(
         self, taskData: PTTaskMessageAllData
     ) -> PTTaskCreateTaskingMessageResponse:
+        if not taskData.args.get_arg("host"):
+            taskData.args.add_arg("host", taskData.Callback.Host)
         return PTTaskCreateTaskingMessageResponse(
             TaskID=taskData.Task.ID,
             Success=True,

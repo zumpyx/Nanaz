@@ -500,6 +500,24 @@ mod tests {
     }
 
     #[test]
+    fn test_ls_uses_callback_host_when_provided() {
+        let dir = unique_tmp("callback-host");
+        let task = TaskMessage {
+            command: "ls".into(),
+            parameters: serde_json::json!({
+                "path": dir.to_string_lossy(),
+                "host": "agent-one.example",
+            })
+            .to_string(),
+            ..Default::default()
+        };
+        let resp = handle(&task);
+        let fb = resp.file_browser.expect("file_browser set");
+        assert_eq!(fb.host.as_deref(), Some("AGENT-ONE.EXAMPLE"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_ls_stays_flat_even_with_legacy_recursive_param() {
         let dir = unique_tmp("flat");
         std::fs::create_dir_all(dir.join("nested")).unwrap();
