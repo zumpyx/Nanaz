@@ -3,6 +3,7 @@ config.json
 mythic-docs/
 up.md
 module_design.md
+scripts/
 __pycache__/
 *.pyc
 .codex/local-notes.md
