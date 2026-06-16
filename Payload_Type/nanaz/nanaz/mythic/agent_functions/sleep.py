@@ -1,4 +1,8 @@
 from mythic_container.MythicCommandBase import *
+from mythic_container.MythicGoRPC.send_mythic_rpc_callback_update import (
+    MythicRPCCallbackUpdateMessage,
+    SendMythicRPCCallbackUpdate,
+)
 
 
 class SleepArguments(TaskArguments):
@@ -100,10 +104,36 @@ class SleepCommand(CommandBase):
         if jitter and jitter > 0:
             displayParams += f" -jitter {jitter}"
         response.DisplayParams = displayParams
+        sleep_info = f"{interval}s"
+        if jitter is not None:
+            sleep_info = f"{sleep_info} +/- {jitter}%"
+        await SendMythicRPCCallbackUpdate(
+            MythicRPCCallbackUpdateMessage(
+                CallbackID=taskData.Callback.ID,
+                SleepInfo=sleep_info,
+            )
+        )
         return response
 
     async def process_response(
         self, task: PTTaskMessageAllData, response: any
     ) -> PTTaskProcessResponseMessageResponse:
         from ._base import error_aware_process_response
-        return error_aware_process_response(task, response)
+
+        resp = error_aware_process_response(task, response)
+        if not resp.Success:
+            return resp
+
+        interval = task.args.get_arg("interval")
+        jitter = task.args.get_arg("jitter")
+        if interval is not None:
+            sleep_info = f"{interval}s"
+            if jitter is not None:
+                sleep_info = f"{sleep_info} +/- {jitter}%"
+            await SendMythicRPCCallbackUpdate(
+                MythicRPCCallbackUpdateMessage(
+                    CallbackID=task.Callback.ID,
+                    SleepInfo=sleep_info,
+                )
+            )
+        return resp

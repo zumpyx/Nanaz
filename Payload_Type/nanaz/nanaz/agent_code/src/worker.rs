@@ -110,12 +110,12 @@ pub fn run_isolated_task(task: &TaskMessage, timeout_secs: u64) -> TaskResponse 
         Err(e) => return TaskResponse::failed(task.id, &format!("spawn task worker failed: {e}")),
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(&request_json) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return TaskResponse::failed(task.id, &format!("write worker request failed: {e}"));
-        }
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(&request_json)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return TaskResponse::failed(task.id, &format!("write worker request failed: {e}"));
     }
 
     let stdout = child.stdout.take();

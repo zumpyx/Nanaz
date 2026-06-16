@@ -1,0 +1,7 @@
+nanaz_windows/agent_code/target/
+nanaz_windows/agent_code/config.json
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+up.md
+module_design.md

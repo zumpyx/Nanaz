@@ -1,0 +1,332 @@
+import asyncio
+import json
+import os
+import pathlib
+import shutil
+import tempfile
+import traceback
+
+from mythic_container.MythicCommandBase import *
+from mythic_container.MythicRPC import *
+from mythic_container.PayloadBuilder import *
+
+TARGETS = {
+    "Windows": "x86_64-pc-windows-gnu",
+    "Linux": "x86_64-unknown-linux-musl",
+}
+PAYLOAD_TARGET_OS = "Linux"
+
+COMMON_COMMANDS = [
+    "cat",
+    "cd",
+    "cp",
+    "download",
+    "drives",
+    "env",
+    "execute",
+    "exit",
+    "kill",
+    "ls",
+    "tree",
+    "mkdir",
+    "mv",
+    "netstat",
+    "ps",
+    "pwd",
+    "resolve",
+    "rm",
+    "rpfwd",
+    "sleep",
+    "socks",
+    "sysinfo",
+    "upload",
+    "wget",
+    "whoami",
+]
+
+DEFAULT_COMMANDS = [
+    "cat",
+    "cd",
+    "download",
+    "drives",
+    "env",
+    "exit",
+    "kill",
+    "ls",
+    "mkdir",
+    "mv",
+    "netstat",
+    "ps",
+    "pwd",
+    "resolve",
+    "rm",
+    "sleep",
+    "sysinfo",
+    "upload",
+    "whoami",
+]
+
+OS_COMMANDS = {
+    "Windows": COMMON_COMMANDS
+    + [
+        "cmd",
+        "execute_assembly",
+        "powerpick",
+        "powershell",
+    ],
+    "Linux": COMMON_COMMANDS
+    + [
+        "bash",
+        "pty",
+        "sh",
+    ],
+}
+
+# Resolve paths from this file's location so the builder works regardless of
+# the container's CWD. Layout: nanaz/{agent_code, mythic}. builder.py lives at
+# nanaz/mythic/agent_functions/builder.py, so three parents reaches nanaz/.
+AGENT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+MYTHIC_PATH = AGENT_ROOT / "mythic"
+AGENT_CODE_PATH = AGENT_ROOT / "agent_code"
+
+TOOL_DIRS = [
+    pathlib.Path("/root/.cargo/bin"),
+    pathlib.Path("/usr/local/cargo/bin"),
+    pathlib.Path("/usr/local/bin"),
+    pathlib.Path("/usr/bin"),
+    pathlib.Path("/bin"),
+]
+
+
+def _resolve_tool(name: str) -> str:
+    """Resolve build tools inside Mythic containers without hardcoding one image."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in TOOL_DIRS:
+        candidate = directory / name
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    searched = os.environ.get("PATH", "")
+    extra = ":".join(str(path) for path in TOOL_DIRS)
+    raise FileNotFoundError(
+        f"required build tool '{name}' not found; searched PATH={searched} and {extra}"
+    )
+
+
+def _build_env() -> dict:
+    env = os.environ.copy()
+    path_entries = [str(path) for path in TOOL_DIRS]
+    if env.get("PATH"):
+        path_entries.append(env["PATH"])
+    env["PATH"] = os.pathsep.join(dict.fromkeys(path_entries))
+    return env
+
+
+def _read_cargo_semver() -> str:
+    """Read the agent version from the `[package]` section of `Cargo.toml`.
+
+    Falls back to a hardcoded string if the file cannot be parsed so a
+    broken sync never bricks the payload-type container — the operator
+    still sees a version, just not necessarily the right one.
+
+    Naive string matching is intentional: a full TOML parser would be
+    overkill for a single scalar, and we explicitly anchor on the
+    `[package]` section header to avoid hitting a dep's `version = "..."`.
+    """
+    cargo_toml = AGENT_CODE_PATH / "Cargo.toml"
+    try:
+        text = cargo_toml.read_text(encoding="utf-8")
+    except OSError:
+        return "0.0.0"
+    in_package = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            in_package = line == "[package]"
+            continue
+        if not in_package:
+            continue
+        if line.startswith("version") and "=" in line:
+            _, _, value = line.partition("=")
+            value = value.strip().strip('"').strip("'")
+            if value:
+                return value
+    return "0.0.0"
+
+
+def _extract_aes_psk(value):
+    if isinstance(value, dict):
+        key = value.get("enc_key")
+    else:
+        key = value
+    if key is None:
+        return None
+    key = str(key).strip()
+    return key or None
+
+
+def _commands_for_os(target_os: str, requested) -> tuple[list[str], list[str]]:
+    """Return the commands that should actually be attached to this payload.
+
+    Mythic records command `supported_os`, but older/stale UI state can still
+    submit an incompatible command list at build time. The build response is
+    the last authoritative point where we can correct that list before Mythic
+    associates commands with the payload/callback.
+    """
+    allowed = OS_COMMANDS[target_os]
+    requested = list(requested or [])
+    if not requested:
+        return [command for command in DEFAULT_COMMANDS if command in allowed], []
+
+    requested_set = set(requested)
+    selected = [command for command in allowed if command in requested_set]
+    dropped = sorted(command for command in requested if command not in allowed)
+    return selected, dropped
+
+
+class NanazLinux(PayloadType):
+    name = "nanaz-linux"
+    file_extension = "bin"
+    author = "@zumpyx"
+    mythic_encrypts = True
+    supported_os = [SupportedOS.Linux]
+    # Authoritative source of the agent version is the Rust crate
+    # (`Cargo.toml`). Reading it at import time keeps the builder from
+    # drifting out of sync, and keeps the displayed note consistent.
+    semver = _read_cargo_semver()
+    wrapper = False
+    wrapped_payloads = []
+    # httpx is intentionally NOT listed — only the http C2 profile is
+    # implemented in src/c2/. Adding it would surface unsupported options
+    # in the operator UI.
+    c2_profiles = ["http"]
+    note = f"Linux Rust agent. Version: {semver}."
+    # Mythic only honors per-payload command selection when this is true. nanaz
+    # still compiles handlers statically; this flag is for build-time command
+    # selection and callback command mappings, not runtime load/unload support.
+    supports_dynamic_loading = True
+    supports_multiple_c2_instances_in_build = False
+    supports_multiple_c2_in_build = False
+
+    build_parameters = [
+        BuildParameter(
+            name="debug",
+            parameter_type=BuildParameterType.Boolean,
+            default_value=False,
+            description="Build with debug symbols.",
+        ),
+    ]
+
+    agent_path = MYTHIC_PATH
+    agent_icon_path = agent_path / "agent_functions" / "nanaz.svg"
+    agent_code_path = AGENT_CODE_PATH
+
+    async def build(self) -> BuildResponse:
+        resp = BuildResponse(status=BuildStatus.Error)
+
+        try:
+            debug = self.get_parameter("debug")
+            selected = str(getattr(self, "selected_os", "")).lower()
+            if selected and "linux" not in selected:
+                raise Exception(
+                    f"unsupported selected_os '{selected}'; only Linux is supported"
+                )
+            target_os = PAYLOAD_TARGET_OS
+            selected_commands, dropped_commands = _commands_for_os(
+                target_os,
+                self.commands.get_commands() if self.commands else [],
+            )
+            resp.updated_command_list = selected_commands
+
+            if len(self.c2info) != 1:
+                raise Exception(
+                    "nanaz-linux supports exactly one http C2 profile per payload build"
+                )
+
+            # --- config.json ---
+            c2_profiles = []
+            for c2 in self.c2info:
+                params = dict(c2.get_parameters_dict())
+                name = c2.get_c2profile()["name"]
+                if name == "http":
+                    aes = params.pop("AESPSK", None)
+                    params["aes_psk"] = _extract_aes_psk(aes)
+                    if params.get("encrypted_exchange_check"):
+                        raise Exception(
+                            "http encrypted_exchange_check is not implemented by nanaz-linux"
+                        )
+                c2_profiles.append({name: params})
+
+            config = {"payload_uuid": self.uuid, "c2_profiles": c2_profiles}
+
+            # --- compile ---
+            triple = TARGETS[target_os]
+            cargo = _resolve_tool("cargo")
+            _resolve_tool("cargo-zigbuild")
+            cargo_args = ["zigbuild", "--target", triple]
+            if not debug:
+                cargo_args.insert(1, "-r")
+
+            with tempfile.TemporaryDirectory(prefix="nanaz-linux-build-") as tmp:
+                build_root = pathlib.Path(tmp) / "agent_code"
+                shutil.copytree(
+                    self.agent_code_path,
+                    build_root,
+                    ignore=shutil.ignore_patterns(
+                        "target",
+                        "config.json",
+                        "__pycache__",
+                        "*.pyc",
+                    ),
+                )
+                config_path = build_root / "config.json"
+                config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+
+                proc = await asyncio.create_subprocess_exec(
+                    cargo,
+                    *cargo_args,
+                    cwd=str(build_root),
+                    env=_build_env(),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    print(line.decode("utf-8", errors="ignore").rstrip(), flush=True)
+                await proc.wait()
+
+                if proc.returncode != 0:
+                    raise Exception(f"cargo zigbuild failed (exit {proc.returncode})")
+
+                # --- collect artifact ---
+                profile = "debug" if debug else "release"
+                binary = build_root / "target" / triple / profile / "nanaz"
+                if target_os == "Windows":
+                    binary = binary.with_suffix(".exe")
+
+                if not binary.exists():
+                    raise Exception(f"binary not found: {binary}")
+
+                resp.payload = binary.read_bytes()
+
+            # --- finalize ---
+            name = pathlib.Path(self.filename).stem
+            if target_os == "Windows":
+                name = f"{name}.exe"
+            resp.updated_filename = name
+            resp.status = BuildStatus.Success
+            if dropped_commands:
+                resp.build_message = (
+                    f"Removed commands unsupported on {target_os}: "
+                    f"{', '.join(dropped_commands)}"
+                )
+
+        except Exception as e:
+            resp.build_message = f"build failed: {e}\n{traceback.format_exc()}"
+            print(f"[-] {resp.build_message}", flush=True)
+
+        return resp
