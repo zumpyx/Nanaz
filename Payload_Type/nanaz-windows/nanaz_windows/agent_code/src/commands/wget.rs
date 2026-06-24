@@ -58,6 +58,41 @@ fn replace_with_temp(temp: &Path, dest: &Path) -> Result<(), String> {
     })
 }
 
+#[cfg(windows)]
+fn curl_fallback(url: &str, temp_dest: &Path, max_bytes: u64) -> Result<u64, String> {
+    let output = std::process::Command::new("curl.exe")
+        .args([
+            "--location",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "60",
+            "--output",
+            &display_path(temp_dest),
+            url,
+        ])
+        .output()
+        .map_err(|e| format!("curl.exe fallback failed to start: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("curl.exe fallback exited with {}", output.status)
+        } else {
+            format!("curl.exe fallback exited with {}: {stderr}", output.status)
+        });
+    }
+
+    let size = std::fs::metadata(temp_dest)
+        .map_err(|e| format!("curl.exe fallback metadata failed: {e}"))?
+        .len();
+    if size > max_bytes {
+        return Err(format!("body exceeds cap {max_bytes} (read {size} bytes)"));
+    }
+    Ok(size)
+}
+
 pub fn handle(task: &TaskMessage) -> TaskResponse {
     let params = match serde_json::from_str::<Params>(&task.parameters) {
         Ok(p) => p,
@@ -106,22 +141,43 @@ pub fn handle(task: &TaskMessage) -> TaskResponse {
 
     let result = http_get_to_writer(&params.url, None, None, cap, &mut writer);
     let n = match result {
-        Ok(n) => n,
+        Ok(n) => {
+            if let Err(e) = std::io::Write::flush(&mut writer) {
+                let _ = std::fs::remove_file(&temp_dest);
+                return TaskResponse::failed(
+                    task.id,
+                    &format!("flush {} failed: {e}", display_path(&dest)),
+                );
+            }
+            drop(writer);
+            n
+        }
         Err(e) => {
-            // Best-effort: remove the partial file.
+            drop(writer);
             let _ = std::fs::remove_file(&temp_dest);
-            return TaskResponse::failed(task.id, &format!("download {} failed: {e}", params.url));
+            #[cfg(windows)]
+            match curl_fallback(&params.url, &temp_dest, cap) {
+                Ok(n) => n,
+                Err(fallback_error) => {
+                    let _ = std::fs::remove_file(&temp_dest);
+                    return TaskResponse::failed(
+                        task.id,
+                        &format!(
+                            "download {} failed: {e}; fallback failed: {fallback_error}",
+                            params.url
+                        ),
+                    );
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                return TaskResponse::failed(
+                    task.id,
+                    &format!("download {} failed: {e}", params.url),
+                );
+            }
         }
     };
-
-    if let Err(e) = std::io::Write::flush(&mut writer) {
-        let _ = std::fs::remove_file(&temp_dest);
-        return TaskResponse::failed(
-            task.id,
-            &format!("flush {} failed: {e}", display_path(&dest)),
-        );
-    }
-    drop(writer);
 
     if let Err(e) = replace_with_temp(&temp_dest, &dest) {
         let _ = std::fs::remove_file(&temp_dest);
