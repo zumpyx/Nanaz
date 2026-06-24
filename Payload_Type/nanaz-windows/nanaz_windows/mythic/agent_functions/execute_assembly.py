@@ -1,0 +1,305 @@
+import base64
+import json
+
+from mythic_container.MythicCommandBase import *
+from mythic_container.MythicRPC import *
+
+from ._base import (
+    error_aware_process_response,
+    read_cli_token,
+    validate_timeout,
+)
+
+MAX_ASSEMBLY_BYTES = 16 * 1024 * 1024
+
+
+class ExecuteAssemblyArguments(TaskArguments):
+    def __init__(self, command_line, **kwargs):
+        super().__init__(command_line, **kwargs)
+        self.args = [
+            CommandParameter(
+                name="assembly_name",
+                cli_name="Assembly",
+                display_name="Assembly",
+                type=ParameterType.ChooseOne,
+                dynamic_query_function=self.get_files,
+                description="Registered .NET assembly to execute.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=True,
+                        group_name="Default",
+                        ui_position=1,
+                    )
+                ],
+            ),
+            CommandParameter(
+                name="assembly_file",
+                display_name="New Assembly",
+                type=ParameterType.File,
+                description="Upload a new .NET assembly to execute.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=True,
+                        group_name="New Assembly",
+                        ui_position=1,
+                    )
+                ],
+            ),
+            CommandParameter(
+                name="assembly_arguments",
+                cli_name="Arguments",
+                display_name="Arguments",
+                type=ParameterType.String,
+                default_value="",
+                description="Arguments to pass to the assembly entry point.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=2,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=2,
+                    ),
+                ],
+            ),
+            CommandParameter(
+                name="patch_exit",
+                type=ParameterType.Boolean,
+                default_value=True,
+                description="Patch System.Environment.Exit so the assembly cannot terminate the agent.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=3,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=3,
+                    ),
+                ],
+            ),
+            CommandParameter(
+                name="max_bytes",
+                type=ParameterType.Number,
+                default_value=MAX_ASSEMBLY_BYTES,
+                description="Maximum assembly size accepted for in-task transfer.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=4,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=4,
+                    ),
+                ],
+            ),
+            CommandParameter(
+                name="timeout",
+                type=ParameterType.Number,
+                default_value=300,
+                description="Maximum worker runtime in seconds.",
+                parameter_group_info=[
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="Default",
+                        ui_position=5,
+                    ),
+                    ParameterGroupInfo(
+                        required=False,
+                        group_name="New Assembly",
+                        ui_position=5,
+                    ),
+                ],
+            ),
+        ]
+
+    async def get_files(
+        self, inputMsg: PTRPCDynamicQueryFunctionMessage
+    ) -> PTRPCDynamicQueryFunctionMessageResponse:
+        response = PTRPCDynamicQueryFunctionMessageResponse(Success=False)
+        file_resp = await SendMythicRPCFileSearch(
+            MythicRPCFileSearchMessage(
+                CallbackID=inputMsg.Callback,
+                LimitByCallback=False,
+                Filename="",
+            )
+        )
+        if not file_resp.Success:
+            response.Error = file_resp.Error
+            return response
+
+        choices = []
+        for f in file_resp.Files:
+            if f.Filename not in choices and f.Filename.lower().endswith(".exe"):
+                choices.append(f.Filename)
+        response.Success = True
+        response.Choices = choices
+        return response
+
+    async def parse_dictionary(self, dictionary_arguments):
+        self.load_args_from_dictionary(dictionary_arguments)
+
+    async def parse_arguments(self):
+        if not self.command_line.strip():
+            raise Exception(
+                f"Require an assembly to execute.\n\tUsage: {ExecuteAssemblyCommand.help_cmd}"
+            )
+        if self.command_line.strip().startswith("{"):
+            self.load_args_from_json_string(self.command_line)
+            return
+
+        cl = self.command_line.strip()
+        assembly_name = ""
+        assembly_arguments = ""
+        patch_exit = None
+
+        i = 0
+        while i < len(cl):
+            token, start, end = read_cli_token(cl, i)
+            if not token:
+                break
+            lower = token.lower()
+            if lower in ("-assembly", "/assembly"):
+                assembly_name, _, i = read_cli_token(cl, end)
+                if not assembly_name:
+                    raise Exception("-Assembly requires a filename")
+            elif lower in ("-arguments", "/arguments", "-args", "/args"):
+                assembly_arguments = cl[end:].strip()
+                break
+            elif lower in ("-patchexit", "/patchexit"):
+                value, _, i = read_cli_token(cl, end)
+                if not value:
+                    raise Exception("-PatchExit requires true or false")
+                patch_exit = value.lower() not in ("false", "0", "no")
+            elif not assembly_name:
+                assembly_name = token
+                assembly_arguments = cl[end:].strip()
+                break
+            elif not assembly_arguments:
+                assembly_arguments = cl[start:].strip()
+                break
+            else:
+                i = end
+
+        if not assembly_name:
+            raise Exception(
+                f"Require an assembly to execute.\n\tUsage: {ExecuteAssemblyCommand.help_cmd}"
+            )
+
+        self.add_arg("assembly_name", assembly_name)
+        self.add_arg("assembly_arguments", assembly_arguments)
+        if patch_exit is not None:
+            self.set_arg("patch_exit", patch_exit)
+
+
+class ExecuteAssemblyCommand(CommandBase):
+    cmd = "execute_assembly"
+    needs_admin = False
+    help_cmd = "execute_assembly [Assembly.exe] [args]"
+    description = "Execute a .NET Framework assembly in an isolated rustclr worker. Explicitly select this command only when CLR execution risk is acceptable."
+    version = 1
+    author = "@zumpyx"
+    argument_class = ExecuteAssemblyArguments
+    attackmapping = ["T1059"]
+    supported_ui_features = ["execute", "execute:assembly", "execute:dotnet"]
+    attributes = CommandAttributes(
+        spawn_and_injectable=False,
+        supported_os=[SupportedOS.Windows],
+        builtin=False,
+        load_only=False,
+        suggested_command=False,
+    )
+
+    async def create_go_tasking(
+        self, taskData: PTTaskMessageAllData
+    ) -> PTTaskCreateTaskingMessageResponse:
+        response = PTTaskCreateTaskingMessageResponse(
+            TaskID=taskData.Task.ID,
+            Success=True,
+        )
+
+        group_name = taskData.args.get_parameter_group_name()
+        assembly_args = taskData.args.get_arg("assembly_arguments") or ""
+
+        try:
+            if group_name == "New Assembly":
+                file_id = taskData.args.get_arg("assembly_file")
+                file_search = await SendMythicRPCFileSearch(
+                    MythicRPCFileSearchMessage(
+                        TaskID=taskData.Task.ID,
+                        AgentFileID=file_id,
+                    )
+                )
+                if not file_search.Success or len(file_search.Files) == 0:
+                    raise Exception(file_search.Error or "uploaded assembly not found")
+                assembly_name = file_search.Files[0].Filename
+                taskData.args.add_arg("assembly_name", assembly_name)
+                taskData.args.remove_arg("assembly_file")
+            else:
+                assembly_name = taskData.args.get_arg("assembly_name")
+                file_search = await SendMythicRPCFileSearch(
+                    MythicRPCFileSearchMessage(
+                        TaskID=taskData.Task.ID,
+                        Filename=assembly_name,
+                        MaxResults=1,
+                    )
+                )
+                if not file_search.Success or len(file_search.Files) == 0:
+                    raise Exception(file_search.Error or f"assembly not found: {assembly_name}")
+                file_id = file_search.Files[0].AgentFileId
+
+            content_resp = await SendMythicRPCFileGetContent(
+                MythicRPCFileGetContentMessage(file_id)
+            )
+            if not content_resp.Success or content_resp.Content is None:
+                raise Exception(content_resp.Error or "failed to fetch assembly bytes")
+            max_bytes = taskData.args.get_arg("max_bytes") or MAX_ASSEMBLY_BYTES
+            timeout = taskData.args.get_arg("timeout") or 300
+            timeout_error = validate_timeout(timeout)
+            if timeout_error:
+                raise Exception(timeout_error)
+            if max_bytes < 1 or max_bytes > MAX_ASSEMBLY_BYTES:
+                raise Exception(
+                    f"max_bytes must be between 1 and {MAX_ASSEMBLY_BYTES}"
+                )
+            if len(content_resp.Content) > max_bytes:
+                raise Exception(
+                    f"assembly is {len(content_resp.Content)} bytes, exceeds max_bytes={max_bytes}"
+                )
+
+            taskData.args.add_arg(
+                "assembly_b64",
+                base64.b64encode(content_resp.Content).decode("utf-8"),
+            )
+            taskData.args.set_manual_args(
+                json.dumps(
+                    {
+                        "assembly_b64": taskData.args.get_arg("assembly_b64"),
+                        "assembly_arguments": assembly_args,
+                        "patch_exit": taskData.args.get_arg("patch_exit"),
+                        "timeout": timeout,
+                    }
+                )
+            )
+            response.DisplayParams = f"-Assembly {assembly_name}"
+            if assembly_args:
+                response.DisplayParams += f" -Arguments {assembly_args}"
+            response.DisplayParams += f" -Timeout {timeout}"
+        except Exception as e:
+            response.Success = False
+            response.Error = str(e)
+
+        return response
+
+    async def process_response(
+        self, task: PTTaskMessageAllData, response: any
+    ) -> PTTaskProcessResponseMessageResponse:
+        return error_aware_process_response(task, response)
